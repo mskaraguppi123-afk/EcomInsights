@@ -1,0 +1,8 @@
+pyproject.toml
+src/ecominsights_ml/__init__.py
+src/ecominsights_ml/data.py
+src/ecominsights_ml/pipeline.py
+src/ecominsights_ml.egg-info/PKG-INFO
+src/ecominsights_ml.egg-info/SOURCES.txt
+src/ecominsights_ml.egg-info/dependency_links.txt
+src/ecominsights_ml.egg-info/top_level.txt

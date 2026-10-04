@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: ecominsights-ml
+Version: 0.1.0
+Summary: Data and model scaffolding for the EcomInsights project
+Requires-Python: >=3.11
