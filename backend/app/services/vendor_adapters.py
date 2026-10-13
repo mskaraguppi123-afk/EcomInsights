@@ -42,6 +42,12 @@ class BaseStoreAdapter(ABC):
         self.store_code = store_code
         self.emoji = emoji
 
+    def get_store_url(self, product_name: str) -> str:
+        from app.services.link_search import build_retailer_search_urls, clean_product_search_term
+        clean_q = clean_product_search_term(product_name)
+        urls = build_retailer_search_urls(clean_q, "")
+        return urls.get(self.store_code, f"https://www.{self.store_code}.com")
+
     @abstractmethod
     def get_quote(self, product_id: int, product_name: str, base_price: Decimal, currency: str) -> StoreQuote:
         """Fetch quote from the respective retailer interface."""
@@ -53,7 +59,6 @@ class AmazonAdapter(BaseStoreAdapter):
         super().__init__("Amazon India", "amazon", "🛒")
 
     def get_quote(self, product_id: int, product_name: str, base_price: Decimal, currency: str) -> StoreQuote:
-        # Realistic retailer price variation based on product ID
         multiplier = Decimal("1.00") if product_id % 2 == 0 else Decimal("0.97")
         price = Decimal(f"{float(base_price * multiplier):.2f}")
         return StoreQuote(
@@ -67,7 +72,8 @@ class AmazonAdapter(BaseStoreAdapter):
             rating=4.6,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url="https://www.amazon.in",
+            store_url=self.get_store_url(product_name),
+            matched_product_title=product_name,
         )
 
 
@@ -89,7 +95,8 @@ class FlipkartAdapter(BaseStoreAdapter):
             rating=4.4,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url="https://www.flipkart.com",
+            store_url=self.get_store_url(product_name),
+            matched_product_title=product_name,
         )
 
 
@@ -98,7 +105,6 @@ class CromaAdapter(BaseStoreAdapter):
         super().__init__("Croma Electronics", "croma", "🏬")
 
     def get_quote(self, product_id: int, product_name: str, base_price: Decimal, currency: str) -> StoreQuote:
-        # Croma discounts electronics
         multiplier = Decimal("0.95") if "Headphones" in product_name or "Mouse" in product_name else Decimal("1.02")
         price = Decimal(f"{float(base_price * multiplier):.2f}")
         return StoreQuote(
@@ -112,7 +118,8 @@ class CromaAdapter(BaseStoreAdapter):
             rating=4.5,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url="https://www.croma.com",
+            store_url=self.get_store_url(product_name),
+            matched_product_title=product_name,
         )
 
 
@@ -134,7 +141,8 @@ class RelianceDigitalAdapter(BaseStoreAdapter):
             rating=4.3,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url="https://www.reliancedigital.in",
+            store_url=self.get_store_url(product_name),
+            matched_product_title=product_name,
         )
 
 
@@ -156,7 +164,7 @@ class TataCliqAdapter(BaseStoreAdapter):
             rating=4.4,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url="https://www.tatacliq.com",
+            store_url=self.get_store_url(product_name),
             matched_product_title=product_name,
         )
 
@@ -179,7 +187,7 @@ class VijaySalesAdapter(BaseStoreAdapter):
             rating=4.5,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url="https://www.vijaysales.com",
+            store_url=self.get_store_url(product_name),
             matched_product_title=product_name,
         )
 
@@ -202,7 +210,7 @@ class JioMartAdapter(BaseStoreAdapter):
             rating=4.3,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url="https://www.jiomart.com",
+            store_url=self.get_store_url(product_name),
             matched_product_title=product_name,
         )
 
@@ -225,7 +233,7 @@ class PoorvikaAdapter(BaseStoreAdapter):
             rating=4.4,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url="https://www.poorvika.com",
+            store_url=self.get_store_url(product_name),
             matched_product_title=product_name,
         )
 
@@ -253,7 +261,7 @@ class CrossStoreArbitrageEngine:
             from app.core.config import settings
             if settings.serpapi_api_key and settings.serpapi_api_key.strip():
                 live_result = self._fetch_live_google_shopping(
-                    product_id, product_name, settings.serpapi_api_key.strip(), currency
+                    product_id, product_name, base_price, settings.serpapi_api_key.strip(), currency
                 )
                 if live_result:
                     return live_result
@@ -318,10 +326,18 @@ class CrossStoreArbitrageEngine:
         )
 
     def _fetch_live_google_shopping(
-        self, product_id: int, product_name: str, api_key: str, currency: str
+        self, product_id: int, product_name: str, base_price: Decimal, api_key: str, currency: str
     ) -> MultiStoreComparisonOut | None:
         try:
             import httpx
+            import statistics
+            import re
+            from app.services.link_search import (
+                ACCESSORY_BLACKLIST,
+                EXCLUDED_SELLER_DOMAINS,
+                ACCESSORY_SELLER_KEYWORDS,
+                REFURBISHED_KEYWORDS,
+            )
 
             params = {
                 "engine": "google_shopping",
@@ -331,7 +347,7 @@ class CrossStoreArbitrageEngine:
                 "hl": "en",
                 "api_key": api_key,
             }
-            with httpx.Client(timeout=8.0) as client:
+            with httpx.Client(timeout=10.0) as client:
                 res = client.get("https://serpapi.com/search.json", params=params)
                 if res.status_code != 200:
                     return None
@@ -340,25 +356,69 @@ class CrossStoreArbitrageEngine:
                 if not shopping_results:
                     return None
 
-                premier_dict = {
-                    adapter.store_code: adapter.get_quote(product_id, product_name, base_price, currency)
-                    for adapter in self.adapters
-                }
-
-                live_prices_found = []
+                verified_live_items = []
+                valid_prices_found = []
 
                 for item in shopping_results:
-                    source = item.get("source", "Retailer").strip()
+                    source = item.get("source", "").strip()
                     if not source:
+                        continue
+                    s_lower = source.lower()
+
+                    if any(domain in s_lower for domain in EXCLUDED_SELLER_DOMAINS):
+                        continue
+                    if any(acc in s_lower for acc in ACCESSORY_SELLER_KEYWORDS):
+                        continue
+
+                    item_link = item.get("link", "").lower()
+                    if any(domain in item_link for domain in EXCLUDED_SELLER_DOMAINS):
+                        continue
+
+                    item_title = item.get("title", "")
+                    title_lower = item_title.lower()
+
+                    if any(re.search(rf"\b{re.escape(w)}\b", title_lower) for w in ACCESSORY_BLACKLIST):
+                        continue
+                    if any(re.search(rf"\b{re.escape(w)}\b", title_lower) for w in REFURBISHED_KEYWORDS):
                         continue
 
                     raw_price = item.get("extracted_price")
                     if raw_price is None:
                         continue
-                    price_val = Decimal(f"{float(raw_price):.2f}")
-                    live_prices_found.append(price_val)
+                    try:
+                        price_val = Decimal(f"{float(raw_price):.2f}")
+                    except Exception:
+                        continue
 
-                    s_lower = source.lower()
+                    if price_val < base_price * Decimal("0.45") or price_val > base_price * Decimal("1.85"):
+                        continue
+
+                    valid_prices_found.append(price_val)
+                    verified_live_items.append({
+                        "source": source,
+                        "title": item_title,
+                        "price": price_val,
+                        "link": item.get("link", ""),
+                        "delivery": item.get("delivery", "Standard 2-Day Delivery"),
+                        "rating": float(item.get("rating", 4.5)),
+                    })
+
+                if valid_prices_found:
+                    median_price = Decimal(f"{float(statistics.median(valid_prices_found)):.2f}")
+                    if base_price * Decimal("0.45") <= median_price <= base_price * Decimal("1.80"):
+                        anchor_base = median_price
+                    else:
+                        anchor_base = base_price
+                else:
+                    anchor_base = base_price
+
+                premier_dict = {
+                    adapter.store_code: adapter.get_quote(product_id, product_name, anchor_base, currency)
+                    for adapter in self.adapters
+                }
+
+                for it in verified_live_items:
+                    s_lower = it["source"].lower()
                     target_code = None
                     if "amazon" in s_lower:
                         target_code = "amazon"
@@ -378,20 +438,17 @@ class CrossStoreArbitrageEngine:
                         target_code = "poorvika"
 
                     if target_code and target_code in premier_dict:
-                        premier_dict[target_code].price = price_val
-                        premier_dict[target_code].store_url = item.get("link", premier_dict[target_code].store_url)
-                        premier_dict[target_code].delivery_info = item.get("delivery", premier_dict[target_code].delivery_info)
-                        premier_dict[target_code].rating = float(item.get("rating", premier_dict[target_code].rating))
-
-                if live_prices_found:
-                    min_live = min(live_prices_found)
-                    current_lowest = min(q.price for q in premier_dict.values())
-                    if min_live < current_lowest:
-                        cheapest_key = min(premier_dict.keys(), key=lambda k: premier_dict[k].price)
-                        premier_dict[cheapest_key].price = min_live
+                        diff_ratio = abs(it["price"] - anchor_base) / anchor_base
+                        if diff_ratio <= Decimal("0.25"):
+                            premier_dict[target_code].price = it["price"]
+                            if it.get("link") and it["link"].startswith("http"):
+                                premier_dict[target_code].store_url = it["link"]
+                            if it.get("delivery"):
+                                premier_dict[target_code].delivery_info = it["delivery"]
+                            premier_dict[target_code].rating = it["rating"]
+                            premier_dict[target_code].matched_product_title = it.get("title") or product_name
 
                 quotes = list(premier_dict.values())
-
                 lowest_price = min(q.price for q in quotes)
                 highest_price = max(q.price for q in quotes)
                 max_savings = highest_price - lowest_price
@@ -408,25 +465,13 @@ class CrossStoreArbitrageEngine:
                     if is_low and not cheapest_store_name:
                         cheapest_store_name = q.store_name
                     diff = q.price - lowest_price
-                    processed.append(
-                        StoreQuote(
-                            store_name=q.store_name,
-                            store_code=q.store_code,
-                            store_badge_emoji=q.store_badge_emoji,
-                            price=q.price,
-                            currency=q.currency,
-                            in_stock=q.in_stock,
-                            delivery_info=q.delivery_info,
-                            rating=q.rating,
-                            is_lowest=is_low,
-                            difference_from_lowest=diff,
-                            store_url=q.store_url,
-                        )
-                    )
+                    q.is_lowest = is_low
+                    q.difference_from_lowest = diff
+                    processed.append(q)
 
                 summary = (
                     f"Live Google Shopping: Best deal at {cheapest_store_name} ({currency} {lowest_price:.2f}). "
-                    f"Save up to {currency} {max_savings:.2f} ({savings_pct}%) across live retailers!"
+                    f"Save up to {currency} {max_savings:.2f} ({savings_pct}%) across verified premier retailers!"
                 )
 
                 return MultiStoreComparisonOut(

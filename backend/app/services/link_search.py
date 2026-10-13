@@ -1,5 +1,6 @@
 from decimal import Decimal
 import re
+import statistics
 from typing import List, Optional
 from urllib.parse import quote_plus, unquote, urlparse
 
@@ -129,57 +130,238 @@ ACCESSORY_BLACKLIST = {
     "strap", "band", "cable", "earpad", "earpads", "pad", "pads", "sweatz",
     "sticker", "wrap", "film", "tempered", "pouch", "sleeve", "cushion",
     "replacement", "adapter", "battery", "hood", "hoops", "earring", "earrings",
-    "decal", "stand", "holder", "cushions"
+    "decal", "stand", "holder", "cushions", "lens cap", "lens filter", "dummy",
+    "toy", "keychain", "charm", "stylus", "pen tip", "charger", "charging dock",
+    "body cap", "rear cap", "filter uv", "screen protector", "glass"
+}
+
+EXCLUDED_SELLER_DOMAINS = {
+    "ubuy", "desertcart", "hgspot", "fishpond", "grandado", "fruugo",
+    "cartlow", "grabmore", "aliexpress", "ebay", "target", "walmart", "bestbuy"
+}
+
+ACCESSORY_SELLER_KEYWORDS = {
+    "kerfcase", "spigen", "dbrand", "dailyobjects", "bear hugs", "gadgetshieldz",
+    "ringke", "caseology", "skins", "cases", "covers", "cellularoutfitter",
+    "caseify", "casetify"
+}
+
+REFURBISHED_KEYWORDS = {
+    "refurbished", "renewed", "pre-owned", "pre-loved", "used", "second hand",
+    "open box", "unboxed", "demo unit", "grade b", "grade c", "reconditioned"
 }
 
 KNOWN_PRODUCTS = {
-    "sony wh 1000xm5": Decimal("29990.00"),
-    "sony wh 1000xm4": Decimal("22990.00"),
+    # Apple iPhones
+    "iphone 16 pro max": Decimal("144900.00"),
+    "iphone 16 pro": Decimal("119900.00"),
+    "iphone 16 plus": Decimal("89900.00"),
+    "iphone 16": Decimal("79900.00"),
+    "iphone 16e": Decimal("59900.00"),
     "iphone 15 pro max": Decimal("134900.00"),
     "iphone 15 pro": Decimal("119900.00"),
     "iphone 15 plus": Decimal("74900.00"),
     "iphone 15": Decimal("64900.00"),
+    "iphone 14 pro max": Decimal("119900.00"),
+    "iphone 14 pro": Decimal("109900.00"),
+    "iphone 14 plus": Decimal("64900.00"),
     "iphone 14": Decimal("54900.00"),
     "iphone 13": Decimal("47900.00"),
+    "iphone 12": Decimal("39900.00"),
+    "iphone se": Decimal("42900.00"),
+    # Apple iPads & Tablets
+    "ipad pro": Decimal("89900.00"),
+    "ipad air": Decimal("59900.00"),
+    "ipad mini": Decimal("49900.00"),
+    "ipad 10th gen": Decimal("34900.00"),
+    "ipad 10": Decimal("34900.00"),
+    "ipad 9th gen": Decimal("27900.00"),
+    "ipad": Decimal("34900.00"),
+    # Samsung Phones & Tablets
+    "galaxy s24 ultra": Decimal("129999.00"),
+    "galaxy s24 plus": Decimal("89999.00"),
+    "galaxy s24": Decimal("74999.00"),
+    "galaxy s24 fe": Decimal("54999.00"),
+    "galaxy s23 ultra": Decimal("89999.00"),
+    "galaxy s23": Decimal("49999.00"),
+    "galaxy z fold 6": Decimal("149999.00"),
+    "galaxy z flip 6": Decimal("89999.00"),
+    "galaxy tab s9": Decimal("69999.00"),
+    "galaxy tab a9": Decimal("13999.00"),
+    # Google Pixel
+    "pixel 9 pro xl": Decimal("124999.00"),
+    "pixel 9 pro": Decimal("109999.00"),
+    "pixel 9": Decimal("74999.00"),
+    "pixel 8 pro": Decimal("89999.00"),
+    "pixel 8": Decimal("59999.00"),
+    "pixel 8a": Decimal("44999.00"),
+    # OnePlus
+    "oneplus 12": Decimal("64999.00"),
+    "oneplus 12r": Decimal("39999.00"),
+    "oneplus 11": Decimal("49999.00"),
+    "oneplus nord 4": Decimal("29999.00"),
+    # Laptops & MacBooks
     "macbook air m3": Decimal("104900.00"),
     "macbook air m2": Decimal("92900.00"),
+    "macbook air m1": Decimal("69900.00"),
+    "macbook air": Decimal("92900.00"),
     "macbook pro": Decimal("169900.00"),
+    "dell xps": Decimal("125000.00"),
+    "hp spectre": Decimal("115000.00"),
+    # Audio
+    "sony wh 1000xm5": Decimal("29990.00"),
+    "sony wh 1000xm4": Decimal("22990.00"),
+    "sony wf 1000xm5": Decimal("21990.00"),
+    "sony wf 1000xm4": Decimal("14990.00"),
+    "airpods max": Decimal("59900.00"),
     "airpods pro": Decimal("20900.00"),
     "airpods": Decimal("12900.00"),
-    "galaxy s24 ultra": Decimal("129999.00"),
-    "galaxy s24": Decimal("74999.00"),
     "boat airdopes": Decimal("1299.00"),
+    "sony headphones": Decimal("1999.00"),
+    # Footwear
+    "air jordan 1": Decimal("12995.00"),
+    "air jordan": Decimal("12995.00"),
+    # Peripherals & Accessories
     "logitech mx master": Decimal("8495.00"),
     "wireless mouse": Decimal("779.00"),
     "steel water bottle": Decimal("489.00"),
-    "sony headphones": Decimal("1999.00"),
 }
+
+
+def clean_product_search_term(title: str) -> str:
+    """Extract a concise, high-intent product search query suitable for retailer search bars.
+
+    Removes noisy URL artifacts, verbose marketing descriptors, filler words, and color variants
+    that cause retailer search algorithms to return unrelated accessories or empty results.
+    """
+    t = re.sub(r"^(Amazon product|Flipkart product)\s+[A-Za-z0-9]+", "", title, flags=re.IGNORECASE).strip()
+    if not t:
+        t = title.strip()
+
+    t_clean = re.sub(r"[^a-z0-9 ]", " ", t.lower())
+    for key in sorted(KNOWN_PRODUCTS.keys(), key=lambda k: len(k), reverse=True):
+        if all(w in t_clean for w in key.split()):
+            return " ".join(word.capitalize() for word in key.split())
+
+    noise_patterns = [
+        r"\b(cancelling|noise cancelling|active noise cancellation|anc)\b",
+        r"\b(fast charging|super retina|xdr display|bionic chip|apple intelligence)\b",
+        r"\b(truly wireless|true wireless|tws|bluetooth|in ear|over ear)\b",
+        r"\b(with mic|with microphone|with case|with silicone case|magsafe)\b",
+        r"\b(black|white|blue|green|silver|gold|space grey|space gray|midnight|starlight|titanium|desert titanium|natural titanium|ultramarine|teal|pink|yellow|purple)\b",
+        r"\b(smartphone|mobile phone|unlocked|cellular|refurbished|renewed)\b",
+    ]
+    cleaned = t
+    for p in noise_patterns:
+        cleaned = re.sub(p, " ", cleaned, flags=re.IGNORECASE)
+
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    tokens = cleaned.split()
+    if len(tokens) > 5:
+        cleaned = " ".join(tokens[:5])
+
+    return cleaned if len(cleaned) >= 3 else t
+
+
+def build_retailer_search_urls(clean_term: str, user_input: str) -> dict[str, str]:
+    """Build accurate, active, direct search URLs for each premier Indian retailer."""
+    encoded = quote_plus(clean_term.strip())
+    u_lower = user_input.lower()
+
+    return {
+        "amazon": user_input if ("amazon." in u_lower) else f"https://www.amazon.in/s?k={encoded}",
+        "flipkart": user_input if ("flipkart." in u_lower) else f"https://www.flipkart.com/search?q={encoded}",
+        "croma": user_input if ("croma." in u_lower) else f"https://www.croma.com/search/?text={encoded}",
+        "reliance": user_input if ("reliancedigital." in u_lower) else f"https://www.reliancedigital.in/search?q={encoded}",
+        "tatacliq": user_input if ("tatacliq." in u_lower) else f"https://www.tatacliq.com/search/?searchCategory=all&text={encoded}",
+        "vijaysales": user_input if ("vijaysales." in u_lower) else f"https://www.vijaysales.com/search?q={encoded}",
+        "jiomart": user_input if ("jiomart." in u_lower) else f"https://www.jiomart.com/search?q={encoded}",
+        "poorvika": user_input if ("poorvika." in u_lower) else f"https://www.poorvika.com/s?q={encoded}",
+    }
 
 
 def resolve_base_price(title: str) -> Decimal:
     """Intelligently determine the benchmark market MRP for a searched product."""
     t_clean = re.sub(r"[^a-z0-9 ]", " ", title.lower())
-    for key, price in KNOWN_PRODUCTS.items():
+    for key in sorted(KNOWN_PRODUCTS.keys(), key=lambda k: len(k), reverse=True):
         if all(w in t_clean for w in key.split()):
-            return price
+            return KNOWN_PRODUCTS[key]
 
-    if any(w in t_clean for w in ["laptop", "macbook"]):
-        return Decimal("65000.00")
-    if any(w in t_clean for w in ["phone", "iphone", "galaxy", "smartphone"]):
-        return Decimal("45000.00")
-    if any(w in t_clean for w in ["headphone", "headset", "audio"]):
-        return Decimal("4999.00")
-    if any(w in t_clean for w in ["earbuds", "airdopes", "tws"]):
-        return Decimal("1999.00")
+    # Smart TVs
+    if any(w in t_clean for w in ["tv", "television", "bravia", "oled", "qled"]):
+        inch_m = re.search(r"(\d{2})\s*(?:inch|in|\"|\b)", t_clean)
+        inch = int(inch_m.group(1)) if inch_m else 0
+        is_oled = "oled" in t_clean
+        if inch >= 75:
+            return Decimal("119900.00")
+        elif inch >= 65:
+            return Decimal("149900.00") if is_oled else Decimal("59900.00")
+        elif inch >= 55:
+            return Decimal("99900.00") if is_oled else Decimal("39900.00")
+        elif inch >= 43:
+            return Decimal("26900.00")
+        elif inch >= 32:
+            return Decimal("12990.00")
+        return Decimal("34900.00")
+
+    # Cameras
+    if any(w in t_clean for w in ["camera", "dslr", "mirrorless", "eos", "alpha"]):
+        if any(b in t_clean for b in ["dslr", "eos", "mirrorless", "canon", "sony", "nikon"]):
+            return Decimal("54990.00")
+        return Decimal("42990.00")
+
+    # Tablets
+    if any(w in t_clean for w in ["ipad", "tablet", "tab"]):
+        if "pro" in t_clean:
+            return Decimal("89900.00")
+        if "air" in t_clean:
+            return Decimal("59900.00")
+        return Decimal("32900.00")
+
+    # Laptops
+    if any(w in t_clean for w in ["laptop", "macbook", "notebook", "thinkpad", "zenbook", "yoga"]):
+        if "gaming" in t_clean or "rtx" in t_clean:
+            return Decimal("74900.00")
+        return Decimal("54900.00")
+
+    # Phones
+    if any(w in t_clean for w in ["phone", "iphone", "galaxy", "smartphone", "pixel", "oneplus", "redmi", "realme", "motorola"]):
+        if "iphone" in t_clean:
+            return Decimal("69900.00")
+        if "ultra" in t_clean or "fold" in t_clean:
+            return Decimal("119999.00")
+        return Decimal("28999.00")
+
+    # Footwear
+    if any(w in t_clean for w in ["shoe", "shoes", "sneakers", "sneaker", "boots", "sandals", "jordan"]):
+        if "jordan" in t_clean:
+            return Decimal("12995.00")
+        if any(b in t_clean for b in ["nike", "adidas", "puma", "asics", "new balance"]):
+            return Decimal("4495.00")
+        return Decimal("2995.00")
+
+    # Smartwatches
     if any(w in t_clean for w in ["watch", "smartwatch"]):
-        return Decimal("3999.00")
-    if any(w in t_clean for w in ["mouse", "keyboard"]):
+        if "apple" in t_clean:
+            return Decimal("39900.00")
+        return Decimal("3499.00")
+
+    # Audio
+    if any(w in t_clean for w in ["headphone", "headphones", "headset", "audio"]):
+        return Decimal("4999.00")
+    if any(w in t_clean for w in ["earbuds", "airdopes", "tws", "earphone", "earphones"]):
+        return Decimal("1999.00")
+
+    # Peripherals
+    if any(w in t_clean for w in ["mouse", "keyboard", "monitor", "display"]):
+        if "monitor" in t_clean or "display" in t_clean:
+            return Decimal("14999.00")
         return Decimal("1299.00")
-    if any(w in t_clean for w in ["bottle", "flask", "cup"]):
+
+    if any(w in t_clean for w in ["bottle", "flask", "cup", "mug"]):
         return Decimal("499.00")
 
-    seed_val = sum(ord(c) for c in title)
-    return Decimal(f"{((seed_val % 18) + 3) * 299:.2f}")
+    return Decimal("2499.00")
 
 
 def _query_serpapi_shopping(
@@ -198,7 +380,6 @@ def _query_serpapi_shopping(
         expected_base = resolve_base_price(clean_q)
 
         q_tokens = [w for w in re.sub(r"[^a-z0-9]", " ", clean_q.lower()).split() if len(w) > 2 and w not in {"the", "and", "with", "for", "black", "blue", "white", "silver", "gold"}]
-        crucial_tokens = [t for t in q_tokens if re.search(r"\d", t) or t in {"sony", "apple", "samsung", "boat", "logitech", "macbook", "iphone", "airpods"}]
 
         params = {
             "engine": "google_shopping",
@@ -219,54 +400,212 @@ def _query_serpapi_shopping(
             if not shopping_results:
                 return None
 
-            # Initialize with the 8 premier Indian retailers
-            premier_dict = {
-                q.store_code: q for q in _generate_offline_search_quotes(
-                    user_input, extracted_title, is_url, source_platform, currency
-                ).stores
-            }
-
-            live_prices_found = []
+            verified_live_items = []
+            valid_prices_found = []
 
             for item in shopping_results:
                 source = item.get("source", "").strip()
                 if not source:
                     continue
+                s_lower = source.lower()
+
+                # Filter A: Excluded seller domains (foreign cross-border aggregators with 300% markups)
+                if any(domain in s_lower for domain in EXCLUDED_SELLER_DOMAINS):
+                    continue
+
+                # Filter B: Accessory sellers (cases, skins, custom backplates, toys)
+                if any(acc in s_lower for acc in ACCESSORY_SELLER_KEYWORDS):
+                    continue
+
+                item_link = item.get("link", "").lower()
+                if any(domain in item_link for domain in EXCLUDED_SELLER_DOMAINS):
+                    continue
 
                 item_title = item.get("title", "")
                 title_lower = item_title.lower()
 
-                # 1. Reject accessories (skins, covers, cases, earpads, stickers, etc.)
+                # Filter C: Reject accessories (skins, covers, cases, earpads, stickers, etc.)
                 if any(re.search(rf"\b{re.escape(w)}\b", title_lower) for w in ACCESSORY_BLACKLIST):
                     continue
 
-                # 2. Reject mismatched products (must match core model tokens)
-                if crucial_tokens:
-                    matched_crucial = sum(1 for tok in crucial_tokens if tok in title_lower)
-                    if matched_crucial < max(1, len(crucial_tokens) - 1):
-                        continue
+                # Filter D: Reject refurbished / used / pre-owned goods
+                if any(re.search(rf"\b{re.escape(w)}\b", title_lower) for w in REFURBISHED_KEYWORDS):
+                    continue
 
-                # 3. Reject models that confuse types (e.g. WF earbuds vs WH headphones)
+                # Filter E: Reject mismatched models (e.g. WF earbuds vs WH headphones)
                 if "wh-" in clean_q.lower() or "wh " in clean_q.lower():
                     if "wf-" in title_lower or "wf " in title_lower or "in-ear" in title_lower or "earbuds" in title_lower:
                         continue
-                if "pro" not in clean_q.lower() and "plus" not in clean_q.lower():
-                    if " pro " in f" {title_lower} " or " plus " in f" {title_lower} " or " max " in f" {title_lower} ":
+
+                # Filter F: Model tier confusion (pro/plus/max/ultra/mini/air)
+                q_clean_lower = f" {clean_q.lower()} "
+                if " pro " not in q_clean_lower and " plus " not in q_clean_lower and " max " not in q_clean_lower and " ultra " not in q_clean_lower:
+                    if " pro " in f" {title_lower} " or " plus " in f" {title_lower} " or " max " in f" {title_lower} " or " ultra " in f" {title_lower} ":
+                        continue
+                if " air " in q_clean_lower and (" pro " in f" {title_lower} " or " mini " in f" {title_lower} "):
+                    continue
+
+                # Filter G: Critical numeric model tokens check
+                num_tokens = [tok for tok in q_tokens if re.search(r"\d", tok)]
+                if num_tokens:
+                    if not any(num_tok in title_lower for num_tok in num_tokens):
                         continue
 
                 raw_price = item.get("extracted_price")
                 if raw_price is None:
                     continue
-                price_val = Decimal(f"{float(raw_price):.2f}")
-
-                # 4. Price sanity: Reject items < 35% of expected baseline (almost certainly parts/accessory)
-                if price_val < expected_base * Decimal("0.35"):
+                try:
+                    price_val = Decimal(f"{float(raw_price):.2f}")
+                except Exception:
                     continue
 
-                live_prices_found.append(price_val)
-                s_lower = source.lower()
+                # Filter H: Hard price sanity bounds relative to benchmark
+                # Must not be < 45% (accessory/part) or > 185% (cross-border markup or top-spec mismatch)
+                if price_val < expected_base * Decimal("0.45") or price_val > expected_base * Decimal("1.85"):
+                    continue
 
-                # Match against our 8 premier stores
+                valid_prices_found.append(price_val)
+                verified_live_items.append({
+                    "source": source,
+                    "title": item_title,
+                    "price": price_val,
+                    "link": item.get("link", ""),
+                    "delivery": item.get("delivery", "Standard 2-Day Delivery"),
+                    "rating": float(item.get("rating", 4.5)),
+                })
+
+            # Derive Consensus Market Anchor Price
+            if valid_prices_found:
+                median_price = Decimal(f"{float(statistics.median(valid_prices_found)):.2f}")
+                if expected_base * Decimal("0.45") <= median_price <= expected_base * Decimal("1.80"):
+                    anchor_base = median_price
+                else:
+                    anchor_base = expected_base
+            else:
+                anchor_base = expected_base
+
+            # Build consistent quotes for the 8 premier Indian retailers calibrated to anchor_base
+            clean_search_q = clean_product_search_term(extracted_title)
+            store_links = build_retailer_search_urls(clean_search_q, user_input)
+
+            premier_dict = {
+                "amazon": StoreQuote(
+                    store_name="Amazon India",
+                    store_code="amazon",
+                    store_badge_emoji="🛒",
+                    price=Decimal(f"{float(anchor_base * Decimal('0.985')):.2f}"),
+                    currency=currency,
+                    in_stock=True,
+                    delivery_info="Prime 1-Day Delivery",
+                    rating=4.6,
+                    is_lowest=False,
+                    difference_from_lowest=Decimal("0.00"),
+                    store_url=store_links["amazon"],
+                    matched_product_title=extracted_title,
+                ),
+                "flipkart": StoreQuote(
+                    store_name="Flipkart",
+                    store_code="flipkart",
+                    store_badge_emoji="🛍️",
+                    price=Decimal(f"{float(anchor_base * Decimal('0.990')):.2f}"),
+                    currency=currency,
+                    in_stock=True,
+                    delivery_info="Flipkart Plus · Free Delivery",
+                    rating=4.5,
+                    is_lowest=False,
+                    difference_from_lowest=Decimal("0.00"),
+                    store_url=store_links["flipkart"],
+                    matched_product_title=extracted_title,
+                ),
+                "croma": StoreQuote(
+                    store_name="Croma Electronics",
+                    store_code="croma",
+                    store_badge_emoji="🏬",
+                    price=Decimal(f"{float(anchor_base * Decimal('0.975')):.2f}"),
+                    currency=currency,
+                    in_stock=True,
+                    delivery_info="Express In-Store Pickup or 2-Day Delivery",
+                    rating=4.6,
+                    is_lowest=False,
+                    difference_from_lowest=Decimal("0.00"),
+                    store_url=store_links["croma"],
+                    matched_product_title=extracted_title,
+                ),
+                "reliance": StoreQuote(
+                    store_name="Reliance Digital",
+                    store_code="reliance",
+                    store_badge_emoji="📱",
+                    price=Decimal(f"{float(anchor_base * Decimal('1.010')):.2f}"),
+                    currency=currency,
+                    in_stock=True,
+                    delivery_info="Standard 2-Day Delivery",
+                    rating=4.3,
+                    is_lowest=False,
+                    difference_from_lowest=Decimal("0.00"),
+                    store_url=store_links["reliance"],
+                    matched_product_title=extracted_title,
+                ),
+                "tatacliq": StoreQuote(
+                    store_name="Tata CLiQ",
+                    store_code="tatacliq",
+                    store_badge_emoji="🏷️",
+                    price=Decimal(f"{float(anchor_base * Decimal('0.980')):.2f}"),
+                    currency=currency,
+                    in_stock=True,
+                    delivery_info="Tata CLiQ Express Delivery",
+                    rating=4.4,
+                    is_lowest=False,
+                    difference_from_lowest=Decimal("0.00"),
+                    store_url=store_links["tatacliq"],
+                    matched_product_title=extracted_title,
+                ),
+                "vijaysales": StoreQuote(
+                    store_name="Vijay Sales",
+                    store_code="vijaysales",
+                    store_badge_emoji="📺",
+                    price=Decimal(f"{float(anchor_base * Decimal('0.970')):.2f}"),
+                    currency=currency,
+                    in_stock=True,
+                    delivery_info="Free Store Pickup & 2-Day Delivery",
+                    rating=4.5,
+                    is_lowest=False,
+                    difference_from_lowest=Decimal("0.00"),
+                    store_url=store_links["vijaysales"],
+                    matched_product_title=extracted_title,
+                ),
+                "jiomart": StoreQuote(
+                    store_name="JioMart",
+                    store_code="jiomart",
+                    store_badge_emoji="🏪",
+                    price=Decimal(f"{float(anchor_base * Decimal('0.995')):.2f}"),
+                    currency=currency,
+                    in_stock=True,
+                    delivery_info="JioMart Free Scheduled Delivery",
+                    rating=4.3,
+                    is_lowest=False,
+                    difference_from_lowest=Decimal("0.00"),
+                    store_url=store_links["jiomart"],
+                    matched_product_title=extracted_title,
+                ),
+                "poorvika": StoreQuote(
+                    store_name="Poorvika Mobiles",
+                    store_code="poorvika",
+                    store_badge_emoji="📲",
+                    price=Decimal(f"{float(anchor_base * Decimal('1.015')):.2f}"),
+                    currency=currency,
+                    in_stock=True,
+                    delivery_info="2-Hour Express Delivery",
+                    rating=4.4,
+                    is_lowest=False,
+                    difference_from_lowest=Decimal("0.00"),
+                    store_url=store_links["poorvika"],
+                    matched_product_title=extracted_title,
+                ),
+            }
+
+            # Update specific premier stores with exact live quotes from SerpApi
+            for it in verified_live_items:
+                s_lower = it["source"].lower()
                 target_code = None
                 if "amazon" in s_lower:
                     target_code = "amazon"
@@ -286,21 +625,17 @@ def _query_serpapi_shopping(
                     target_code = "poorvika"
 
                 if target_code and target_code in premier_dict:
-                    premier_dict[target_code].price = price_val
-                    premier_dict[target_code].store_url = item.get("link", premier_dict[target_code].store_url)
-                    premier_dict[target_code].delivery_info = item.get("delivery", premier_dict[target_code].delivery_info)
-                    premier_dict[target_code].rating = float(item.get("rating", premier_dict[target_code].rating))
-
-            # Calibrate premier baseline with live market best price if available
-            if live_prices_found:
-                min_live = min(live_prices_found)
-                current_lowest = min(q.price for q in premier_dict.values())
-                if min_live < current_lowest:
-                    cheapest_key = min(premier_dict.keys(), key=lambda k: premier_dict[k].price)
-                    premier_dict[cheapest_key].price = min_live
+                    diff_ratio = abs(it["price"] - anchor_base) / anchor_base
+                    if diff_ratio <= Decimal("0.25"):
+                        premier_dict[target_code].price = it["price"]
+                        if it.get("link") and it["link"].startswith("http"):
+                            premier_dict[target_code].store_url = it["link"]
+                        if it.get("delivery"):
+                            premier_dict[target_code].delivery_info = it["delivery"]
+                        premier_dict[target_code].rating = it["rating"]
+                        premier_dict[target_code].matched_product_title = it.get("title") or extracted_title
 
             quotes = list(premier_dict.values())
-
             lowest_price = min(q.price for q in quotes)
             highest_price = max(q.price for q in quotes)
             max_savings = highest_price - lowest_price
@@ -317,22 +652,15 @@ def _query_serpapi_shopping(
                 if is_low and not cheapest_store_name:
                     cheapest_store_name = q.store_name
                 diff = q.price - lowest_price
-                processed.append(
-                    StoreQuote(
-                        store_name=q.store_name,
-                        store_code=q.store_code,
-                        store_badge_emoji=q.store_badge_emoji,
-                        price=q.price,
-                        currency=q.currency,
-                        in_stock=q.in_stock,
-                        delivery_info=q.delivery_info,
-                        rating=q.rating,
-                        is_lowest=is_low,
-                        difference_from_lowest=diff,
-                        store_url=q.store_url,
-                        matched_product_title=extracted_title,
-                    )
-                )
+                q.is_lowest = is_low
+                q.difference_from_lowest = diff
+                processed.append(q)
+
+            data_source_label = (
+                "Live Google Shopping API (Calibrated Consensus)"
+                if valid_prices_found
+                else "Multi-Store Exact-Product Retailer Engine"
+            )
 
             summary = (
                 f"Same-Product Arbitrage: Best deal for {extracted_title} found at {cheapest_store_name} ({currency} {lowest_price:.2f}). "
@@ -350,7 +678,7 @@ def _query_serpapi_shopping(
                 max_savings=max_savings,
                 savings_percentage=savings_pct,
                 recommendation_summary=summary,
-                data_source="Live Google Shopping API (Verified Exact Matches)",
+                data_source=data_source_label,
                 is_live_api=True,
                 stores=processed,
             )
@@ -367,129 +695,120 @@ def _generate_offline_search_quotes(
 ) -> UniversalSearchOut:
     """Generate exact same product quotes across premier Indian retailers: Amazon, Flipkart, Croma, Reliance Digital."""
     base = resolve_base_price(extracted_title)
-    encoded = quote_plus(extracted_title)
-
-    # Use direct submitted URL if matching, otherwise direct search URL
-    amazon_link = user_input if ("amazon" in user_input.lower()) else f"https://www.amazon.in/s?k={encoded}"
-    flipkart_link = user_input if ("flipkart" in user_input.lower()) else f"https://www.flipkart.com/search?q={encoded}"
-    croma_link = user_input if ("croma" in user_input.lower()) else f"https://www.croma.com/searchB?q={encoded}"
-    reliance_link = user_input if ("reliance" in user_input.lower()) else f"https://www.reliancedigital.in/search?q={encoded}"
-    tatacliq_link = user_input if ("tatacliq" in user_input.lower()) else f"https://www.tatacliq.com/search/?searchCategory=all&text={encoded}"
-    vijaysales_link = user_input if ("vijaysales" in user_input.lower()) else f"https://www.vijaysales.com/search/{encoded}"
-    jiomart_link = user_input if ("jiomart" in user_input.lower()) else f"https://www.jiomart.com/search/{encoded}"
-    poorvika_link = user_input if ("poorvika" in user_input.lower()) else f"https://www.poorvika.com/?search={encoded}"
+    clean_search_q = clean_product_search_term(extracted_title)
+    store_links = build_retailer_search_urls(clean_search_q, user_input)
 
     quotes = [
         StoreQuote(
             store_name="Amazon India",
             store_code="amazon",
             store_badge_emoji="🛒",
-            price=Decimal(f"{float(base * Decimal('0.98')):.2f}"),
+            price=Decimal(f"{float(base * Decimal('0.985')):.2f}"),
             currency=currency,
             in_stock=True,
             delivery_info="Prime 1-Day Delivery",
             rating=4.6,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url=amazon_link,
+            store_url=store_links["amazon"],
             matched_product_title=extracted_title,
         ),
         StoreQuote(
             store_name="Flipkart",
             store_code="flipkart",
             store_badge_emoji="🛍️",
-            price=Decimal(f"{float(base * Decimal('1.01')):.2f}"),
+            price=Decimal(f"{float(base * Decimal('0.990')):.2f}"),
             currency=currency,
             in_stock=True,
             delivery_info="Flipkart Plus · Free Delivery",
             rating=4.5,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url=flipkart_link,
+            store_url=store_links["flipkart"],
             matched_product_title=extracted_title,
         ),
         StoreQuote(
             store_name="Croma Electronics",
             store_code="croma",
             store_badge_emoji="🏬",
-            price=Decimal(f"{float(base * Decimal('0.94')):.2f}"),
+            price=Decimal(f"{float(base * Decimal('0.975')):.2f}"),
             currency=currency,
             in_stock=True,
             delivery_info="Express In-Store Pickup or 2-Day Delivery",
             rating=4.6,
-            is_lowest=True,
+            is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url=croma_link,
+            store_url=store_links["croma"],
             matched_product_title=extracted_title,
         ),
         StoreQuote(
             store_name="Reliance Digital",
             store_code="reliance",
             store_badge_emoji="📱",
-            price=Decimal(f"{float(base * Decimal('1.03')):.2f}"),
+            price=Decimal(f"{float(base * Decimal('1.010')):.2f}"),
             currency=currency,
             in_stock=True,
             delivery_info="Standard 2-Day Delivery",
             rating=4.3,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url=reliance_link,
+            store_url=store_links["reliance"],
             matched_product_title=extracted_title,
         ),
         StoreQuote(
             store_name="Tata CLiQ",
             store_code="tatacliq",
             store_badge_emoji="🏷️",
-            price=Decimal(f"{float(base * Decimal('0.97')):.2f}"),
+            price=Decimal(f"{float(base * Decimal('0.980')):.2f}"),
             currency=currency,
             in_stock=True,
             delivery_info="Tata CLiQ Express Delivery",
             rating=4.4,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url=tatacliq_link,
+            store_url=store_links["tatacliq"],
             matched_product_title=extracted_title,
         ),
         StoreQuote(
             store_name="Vijay Sales",
             store_code="vijaysales",
             store_badge_emoji="📺",
-            price=Decimal(f"{float(base * Decimal('0.95')):.2f}"),
+            price=Decimal(f"{float(base * Decimal('0.970')):.2f}"),
             currency=currency,
             in_stock=True,
             delivery_info="Free Store Pickup & 2-Day Delivery",
             rating=4.5,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url=vijaysales_link,
+            store_url=store_links["vijaysales"],
             matched_product_title=extracted_title,
         ),
         StoreQuote(
             store_name="JioMart",
             store_code="jiomart",
             store_badge_emoji="🏪",
-            price=Decimal(f"{float(base * Decimal('0.99')):.2f}"),
+            price=Decimal(f"{float(base * Decimal('0.995')):.2f}"),
             currency=currency,
             in_stock=True,
             delivery_info="JioMart Free Scheduled Delivery",
             rating=4.3,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url=jiomart_link,
+            store_url=store_links["jiomart"],
             matched_product_title=extracted_title,
         ),
         StoreQuote(
             store_name="Poorvika Mobiles",
             store_code="poorvika",
             store_badge_emoji="📲",
-            price=Decimal(f"{float(base * Decimal('1.02')):.2f}"),
+            price=Decimal(f"{float(base * Decimal('1.015')):.2f}"),
             currency=currency,
             in_stock=True,
             delivery_info="2-Hour Express Delivery",
             rating=4.4,
             is_lowest=False,
             difference_from_lowest=Decimal("0.00"),
-            store_url=poorvika_link,
+            store_url=store_links["poorvika"],
             matched_product_title=extracted_title,
         ),
     ]

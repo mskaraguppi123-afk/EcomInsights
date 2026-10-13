@@ -939,13 +939,23 @@ export default function App() {
                         ₹{parseFloat(s.price).toFixed(2)}
                       </div>
                       <div style={{ fontSize: '11px', color: '#7a8781' }}>{s.delivery_info}</div>
-                      {s.is_lowest ? (
-                        <div style={{ fontSize: '11px', color: '#1f7359', fontWeight: '700', margin: '6px 0 0' }}>✓ Best Deal Selected</div>
-                      ) : (
-                        <div style={{ fontSize: '11px', color: '#dc3545', fontWeight: '600', margin: '6px 0 0' }}>
-                          +₹{parseFloat(s.difference_from_lowest).toFixed(2)} higher
-                        </div>
-                      )}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', paddingTop: '6px', borderTop: '1px solid #f0f3f1' }}>
+                        {s.is_lowest ? (
+                          <span style={{ fontSize: '11px', color: '#1f7359', fontWeight: '700' }}>✓ Best Deal</span>
+                        ) : (
+                          <span style={{ fontSize: '11px', color: '#dc3545', fontWeight: '600' }}>
+                            +₹{parseFloat(s.difference_from_lowest).toFixed(2)}
+                          </span>
+                        )}
+                        <a
+                          href={s.store_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ fontSize: '11px', color: '#1f7359', fontWeight: '700', textDecoration: 'none' }}
+                        >
+                          Visit Store →
+                        </a>
+                      </div>
                     </div>
                   ))}
                 </div>
