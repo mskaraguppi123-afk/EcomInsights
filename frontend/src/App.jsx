@@ -99,6 +99,85 @@ function PriceChart({ observations, predictedPrice, candidatePrice }) {
   )
 }
 
+function extractModelIdentifiers(text) {
+  if (!text) return { normalized: '', tokens: [], numbers: new Set(), modelCodes: new Set(), families: {}, variants: new Set() }
+  const norm = text.toLowerCase().replace(/[\-_/+,|:;*#()\[\]{}'"`~!?@$%^&=<>]/g, ' ').replace(/\s+/g, ' ').trim()
+  const tokens = norm.split(' ').filter(Boolean)
+  const numbers = new Set(norm.match(/\b\d+\b/g) || [])
+  const modelCodes = new Set(norm.match(/\b(?:[a-z]+\d+|\d+[a-z]+[a-z0-9]*)\b/g) || [])
+
+  const families = {}
+  const iphoneM = norm.match(/\biphone\s+(\d+|se|x|xs|xr)\b/)
+  if (iphoneM) families.iphone = iphoneM[1]
+  const galaxySM = norm.match(/\b(?:galaxy\s+)?s\s*(\d+)\b/)
+  if (galaxySM) families.galaxy_s = galaxySM[1]
+  const ipadM = norm.match(/\bipad\s+(mini|air|pro|\d+)\b/)
+  if (ipadM) families.ipad = ipadM[1]
+  const sonyWhM = norm.match(/\bwh\s*(\d+[a-z0-9]+)\b/)
+  if (sonyWhM) families.sony_wh = sonyWhM[1]
+
+  const variants = new Set()
+  ;['pro max', 'pro', 'plus', 'mini', 'ultra', 'fe', 'air'].forEach((v) => {
+    if (new RegExp(`\\b${v}\\b`).test(norm)) variants.add(v)
+  })
+
+  return { normalized: norm, tokens, numbers, modelCodes, families, variants }
+}
+
+function matchProduct(query, candidateName) {
+  if (!query || !query.trim()) return { matched: true, score: 50 }
+  const q = extractModelIdentifiers(query)
+  const c = extractModelIdentifiers(candidateName)
+
+  // 1. Model family conflict: iPhone 16 must not match iPhone 18
+  for (const [fam, qVal] of Object.entries(q.families)) {
+    if (c.families[fam] && qVal !== c.families[fam]) {
+      return { matched: false, score: 0 }
+    }
+  }
+
+  // 2. Standalone number conflict
+  if (q.numbers.size > 0) {
+    for (const num of q.numbers) {
+      if (!c.numbers.has(num)) {
+        return { matched: false, score: 0 }
+      }
+    }
+  }
+
+  // 3. Model code conflict
+  if (q.modelCodes.size > 0 && c.modelCodes.size > 0) {
+    for (const code of q.modelCodes) {
+      if (!c.modelCodes.has(code)) return { matched: false, score: 0 }
+    }
+  }
+
+  // 4. Variant conflict: if query requested pro but candidate has no pro
+  if (q.variants.size > 0) {
+    let hasVariant = false
+    for (const v of q.variants) {
+      if (c.variants.has(v)) hasVariant = true
+    }
+    if (!hasVariant) return { matched: false, score: 0 }
+  }
+
+  const fillers = new Set(['the', 'and', 'with', 'for', 'in', 'by', 'apple'])
+  const sigQ = q.tokens.filter((t) => !fillers.has(t))
+  const sigC = new Set(c.tokens.filter((t) => !fillers.has(t)))
+
+  if (q.normalized === c.normalized) return { matched: true, score: 100 }
+  if (sigQ.length > 0 && sigQ.every((t) => sigC.has(t))) {
+    let extraVariants = 0
+    c.variants.forEach((v) => { if (!q.variants.has(v)) extraVariants++ })
+    return { matched: true, score: extraVariants > 0 ? 70 : 90 }
+  }
+
+  const overlap = sigQ.filter((t) => sigC.has(t))
+  const ratio = sigQ.length > 0 ? overlap.length / sigQ.length : 0
+  if (ratio >= 0.75) return { matched: true, score: Math.round(ratio * 75) }
+  return { matched: false, score: 0 }
+}
+
 export default function App() {
   const [apiStatus, setApiStatus] = useState('Checking API…')
   const [products, setProducts] = useState([])
@@ -307,11 +386,18 @@ export default function App() {
 
   const categories = ['ALL', ...Array.from(new Set(products.map((p) => p.category).filter(Boolean)))]
 
-  const filteredProducts = products.filter((p) => {
-    const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesCategory = selectedCategory === 'ALL' || p.category === selectedCategory
-    return matchesSearch && matchesCategory
-  })
+  const filteredProducts = products
+    .filter((p) => {
+      const match = matchProduct(searchTerm, p.name)
+      const matchesCategory = selectedCategory === 'ALL' || p.category === selectedCategory
+      return match.matched && matchesCategory
+    })
+    .sort((a, b) => {
+      if (!searchTerm) return 0
+      const scoreA = matchProduct(searchTerm, a.name).score
+      const scoreB = matchProduct(searchTerm, b.name).score
+      return scoreB - scoreA
+    })
 
   return (
     <main className="page-shell">
@@ -497,77 +583,96 @@ export default function App() {
               💡 <strong>{universalResult.recommendation_summary}</strong>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '12px' }}>
-              {universalResult.stores.map((s) => (
-                <div
-                  key={s.store_name}
-                  style={{
-                    border: s.is_lowest ? '2px solid #1f7359' : '1px solid #e0e6e2',
-                    background: s.is_lowest ? '#ffffff' : '#fafcfb',
-                    borderRadius: '10px',
-                    padding: '14px',
-                    position: 'relative',
-                    boxShadow: s.is_lowest ? '0 4px 12px rgba(31,115,89,0.08)' : 'none',
-                  }}
-                >
-                  {s.is_lowest && (
-                    <span
-                      style={{
-                        position: 'absolute',
-                        top: '-9px',
-                        right: '10px',
-                        background: '#1f7359',
-                        color: '#fff',
-                        fontSize: '9px',
-                        fontWeight: '800',
-                        padding: '2px 8px',
-                        borderRadius: '4px',
-                        textTransform: 'uppercase',
-                      }}
-                    >
-                      Lowest Price
-                    </span>
-                  )}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#18231f' }}>
-                      {s.store_badge_emoji} {s.store_name}
-                    </span>
-                    <span style={{ fontSize: '12px', color: '#77827d' }}>★ {s.rating}</span>
-                  </div>
-                  <div style={{ fontSize: '11px', color: '#1f7359', fontWeight: '600', marginTop: '4px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                    📦 {s.matched_product_title || universalResult.extracted_title}
-                  </div>
+            {(!universalResult.has_reliable_match || universalResult.lowest_price === null || universalResult.stores.length === 0) ? (
+              <div style={{ textAlign: 'center', padding: '24px 16px', background: '#fff', border: '1px dashed #d5ddd8', borderRadius: '10px' }}>
+                <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔎</div>
+                <div style={{ fontSize: '15px', fontWeight: '800', color: '#18231f' }}>Price Unavailable / No Reliable Match</div>
+                <p style={{ fontSize: '13px', color: '#6e7d75', margin: '6px 0 0' }}>
+                  {universalResult.recommendation_summary || `No verified price data found for '${universalResult.extracted_title}' in trusted data sources.`}
+                </p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '12px' }}>
+                {universalResult.stores.map((s) => (
                   <div
+                    key={s.store_name}
                     style={{
-                      fontSize: '20px',
-                      fontWeight: '800',
-                      color: s.is_lowest ? '#1f7359' : '#18231f',
-                      margin: '8px 0 4px',
+                      border: s.is_lowest ? '2px solid #1f7359' : '1px solid #e0e6e2',
+                      background: s.is_lowest ? '#ffffff' : '#fafcfb',
+                      borderRadius: '10px',
+                      padding: '14px',
+                      position: 'relative',
+                      boxShadow: s.is_lowest ? '0 4px 12px rgba(31,115,89,0.08)' : 'none',
                     }}
                   >
-                    ₹{parseFloat(s.price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </div>
-                  <div style={{ fontSize: '11px', color: '#77827d' }}>{s.delivery_info}</div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #f0f3f1' }}>
-                    {s.is_lowest ? (
-                      <span style={{ fontSize: '12px', color: '#1f7359', fontWeight: '700' }}>✓ Best Deal</span>
-                    ) : (
-                      <span style={{ fontSize: '12px', color: '#dc3545', fontWeight: '600' }}>
-                        +₹{parseFloat(s.difference_from_lowest).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {s.is_lowest && (
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: '-9px',
+                          right: '10px',
+                          background: '#1f7359',
+                          color: '#fff',
+                          fontSize: '9px',
+                          fontWeight: '800',
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        Lowest Price
                       </span>
                     )}
-                    <a
-                      href={s.store_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ fontSize: '12px', color: '#1f7359', fontWeight: '700', textDecoration: 'none' }}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '14px', fontWeight: '700', color: '#18231f' }}>
+                        {s.store_badge_emoji} {s.store_name}
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#77827d' }}>★ {s.rating}</span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#1f7359', fontWeight: '600', marginTop: '4px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                      📦 {s.matched_product_title || universalResult.extracted_title}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '20px',
+                        fontWeight: '800',
+                        color: s.is_lowest ? '#1f7359' : '#18231f',
+                        margin: '8px 0 4px',
+                      }}
                     >
-                      Visit Store →
-                    </a>
+                      {s.price !== null && s.price !== undefined
+                        ? `₹${parseFloat(s.price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                        : 'Price unavailable'}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#77827d' }}>{s.delivery_info}</div>
+                    {s.fetched_at && (
+                      <div style={{ fontSize: '10px', color: '#88958f', marginTop: '2px' }}>
+                        Checked: {new Date(s.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #f0f3f1' }}>
+                      {s.is_lowest ? (
+                        <span style={{ fontSize: '12px', color: '#1f7359', fontWeight: '700' }}>✓ Best Deal</span>
+                      ) : (
+                        <span style={{ fontSize: '12px', color: '#dc3545', fontWeight: '600' }}>
+                          {s.difference_from_lowest !== null && s.difference_from_lowest !== undefined
+                            ? `+₹${parseFloat(s.difference_from_lowest).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                            : 'N/A'}
+                        </span>
+                      )}
+                      <a
+                        href={s.store_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontSize: '12px', color: '#1f7359', fontWeight: '700', textDecoration: 'none' }}
+                      >
+                        Visit Store →
+                      </a>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -637,7 +742,7 @@ export default function App() {
               </div>
               <h3 style={{ fontSize: '17px', margin: '8px 0 6px', fontWeight: '700' }}>{p.name}</h3>
               <div style={{ fontSize: '22px', fontWeight: '800', color: '#192620' }}>
-                {p.currency === 'INR' ? '₹' : p.currency} {p.latest_price || 'N/A'}
+                {p.latest_price ? `${p.currency === 'INR' ? '₹' : (p.currency || '')} ${parseFloat(p.latest_price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'Price unavailable'}
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #ecefe2', fontSize: '12px', color: '#74827b' }}>
                 <span>Last observed: {p.last_observed_at ? new Date(p.last_observed_at).toLocaleDateString() : 'N/A'}</span>
@@ -703,7 +808,9 @@ export default function App() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', background: '#f5f8f6', padding: '12px', borderRadius: '10px', margin: '18px 0', textAlign: 'center' }}>
               <div>
                 <div style={{ fontSize: '10px', fontWeight: '700', color: '#7a8781', textTransform: 'uppercase' }}>Current Price</div>
-                <div style={{ fontSize: '18px', fontWeight: '800' }}>₹{selectedProduct.latest_price}</div>
+                <div style={{ fontSize: '18px', fontWeight: '800' }}>
+                  {selectedProduct.latest_price ? `₹${parseFloat(selectedProduct.latest_price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'Price unavailable'}
+                </div>
               </div>
               <div>
                 <div style={{ fontSize: '10px', fontWeight: '700', color: '#7a8781', textTransform: 'uppercase' }}>Observations</div>

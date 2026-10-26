@@ -8,15 +8,16 @@ class StoreQuote(BaseModel):
     store_name: str
     store_code: str
     store_badge_emoji: str
-    price: Decimal
+    price: Optional[Decimal] = None
     currency: str
     in_stock: bool
     delivery_info: str
     rating: float
     is_lowest: bool
-    difference_from_lowest: Decimal
+    difference_from_lowest: Optional[Decimal] = None
     store_url: str
     matched_product_title: Optional[str] = None
+    fetched_at: Optional[str] = None
 
 
 class MultiStoreComparisonOut(BaseModel):

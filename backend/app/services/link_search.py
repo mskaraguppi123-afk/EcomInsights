@@ -1,7 +1,8 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 import re
 import statistics
-from typing import List, Optional
+from typing import Any, List, Optional, Tuple
 from urllib.parse import quote_plus, unquote, urlparse
 
 from pydantic import BaseModel
@@ -16,10 +17,10 @@ class UniversalSearchOut(BaseModel):
     is_url: bool
     source_platform: str
     cheapest_store: str
-    lowest_price: Decimal
-    highest_price: Decimal
-    max_savings: Decimal
-    savings_percentage: float
+    lowest_price: Optional[Decimal] = None
+    highest_price: Optional[Decimal] = None
+    max_savings: Optional[Decimal] = None
+    savings_percentage: float = 0.0
     recommendation_summary: str
     data_source: str
     is_live_api: bool
@@ -27,6 +28,75 @@ class UniversalSearchOut(BaseModel):
     tracked_product_id: Optional[int] = None
     db_updated: bool = False
     db_action: Optional[str] = None
+    has_reliable_match: bool = True
+    fetched_at: Optional[str] = None
+
+
+def parse_serpapi_price(item: dict[str, Any], default_currency: str = "INR") -> Tuple[Optional[Decimal], str]:
+    """Read and parse the price strictly from this item's own SerpApi response data.
+
+    Never copies from another product or uses a generic fallback price.
+    Returns (price_decimal_or_None, currency_code).
+    """
+    currency = default_currency
+    raw_price = item.get("extracted_price")
+    price_str = str(item.get("price") or "").strip()
+
+    if "$" in price_str:
+        currency = "USD"
+    elif "₹" in price_str or "rs" in price_str.lower() or "inr" in price_str.lower():
+        currency = "INR"
+    elif "€" in price_str:
+        currency = "EUR"
+    elif "£" in price_str:
+        currency = "GBP"
+
+    if raw_price is not None:
+        try:
+            val = Decimal(str(raw_price).strip())
+            if val > 0:
+                return Decimal(f"{val:.2f}"), currency
+        except Exception:
+            pass
+
+    if price_str:
+        cleaned = re.sub(r"[^\d.]", "", price_str.replace(",", ""))
+        if cleaned:
+            try:
+                val = Decimal(cleaned)
+                if val > 0:
+                    return Decimal(f"{val:.2f}"), currency
+            except Exception:
+                pass
+
+    return None, currency
+
+
+def get_store_metadata(source: str) -> Tuple[str, str]:
+    """Derive a normalized store code and identifiable badge emoji from retailer name."""
+    s = source.lower()
+    if "amazon" in s:
+        return "amazon", "🛒"
+    if "flipkart" in s:
+        return "flipkart", "🛍️"
+    if "croma" in s:
+        return "croma", "🏬"
+    if "reliance" in s:
+        return "reliance", "📱"
+    if "tata" in s or "cliq" in s:
+        return "tatacliq", "🏷️"
+    if "vijay" in s:
+        return "vijaysales", "📺"
+    if "jio" in s:
+        return "jiomart", "🏪"
+    if "poorvika" in s:
+        return "poorvika", "📲"
+    if "apple" in s:
+        return "apple", "🍏"
+    if "samsung" in s:
+        return "samsung", "📱"
+    clean_code = re.sub(r"[^a-z0-9]", "", s) or "retailer"
+    return clean_code[:20], "🏪"
 
 
 def extract_product_title(user_input: str) -> tuple[str, bool, str]:
@@ -98,7 +168,11 @@ def extract_product_title(user_input: str) -> tuple[str, bool, str]:
     return clean_input, True, "Web Link"
 
 
-def search_and_compare_product(user_input: str, currency: str = "INR") -> UniversalSearchOut:
+def search_and_compare_product(
+    user_input: str,
+    currency: str = "INR",
+    db: Optional[Any] = None,
+) -> UniversalSearchOut:
     """Perform real-time multi-store price comparison from a link or keyword query."""
     extracted_title, is_url, source_platform = extract_product_title(user_input)
 
@@ -111,6 +185,7 @@ def search_and_compare_product(user_input: str, currency: str = "INR") -> Univer
             source_platform=source_platform,
             api_key=settings.serpapi_api_key.strip(),
             currency=currency,
+            db=db,
         )
         if live_result:
             return live_result
@@ -122,6 +197,7 @@ def search_and_compare_product(user_input: str, currency: str = "INR") -> Univer
         is_url=is_url,
         source_platform=source_platform,
         currency=currency,
+        db=db,
     )
 
 
@@ -223,6 +299,7 @@ KNOWN_PRODUCTS = {
     "air jordan": Decimal("12995.00"),
     # Peripherals & Accessories
     "logitech mx master": Decimal("8495.00"),
+    "logitech mouse": Decimal("999.00"),
     "wireless mouse": Decimal("779.00"),
     "steel water bottle": Decimal("489.00"),
 }
@@ -231,18 +308,33 @@ KNOWN_PRODUCTS = {
 def clean_product_search_term(title: str) -> str:
     """Extract a concise, high-intent product search query suitable for retailer search bars.
 
-    Removes noisy URL artifacts, verbose marketing descriptors, filler words, and color variants
-    that cause retailer search algorithms to return unrelated accessories or empty results.
+    Removes noisy URL artifacts, verbose marketing descriptors, filler words, and color variants.
+    Preserves meaningful model numbers, generations, and variants.
     """
+    from app.services.search_matcher import match_product
+
     t = re.sub(r"^(Amazon product|Flipkart product)\s+[A-Za-z0-9]+", "", title, flags=re.IGNORECASE).strip()
     if not t:
         t = title.strip()
 
-    t_clean = re.sub(r"[^a-z0-9 ]", " ", t.lower())
+    # If it reliably matches a known product model, return that standard capitalized model name
+    best_key = None
+    best_score = 0
     for key in sorted(KNOWN_PRODUCTS.keys(), key=lambda k: len(k), reverse=True):
-        if all(w in t_clean for w in key.split()):
-            return " ".join(word.capitalize() for word in key.split())
+        m1, s1, r1 = match_product(t, key)
+        m2, s2, r2 = match_product(key, t)
+        if (not m1 and "Conflict" in (r1 or "")) or (not m2 and "Conflict" in (r2 or "")):
+            continue
+        effective_match = m1 or (m2 and s2 >= 70)
+        effective_score = max(s1, s2) if (m1 or m2) else 0
+        if effective_match and effective_score >= 70 and effective_score > best_score:
+            best_score = effective_score
+            best_key = key
 
+    if best_key:
+        return " ".join(word.capitalize() for word in best_key.split())
+
+    # Otherwise clean out marketing noise while strictly preserving model numbers
     noise_patterns = [
         r"\b(cancelling|noise cancelling|active noise cancellation|anc)\b",
         r"\b(fast charging|super retina|xdr display|bionic chip|apple intelligence)\b",
@@ -280,88 +372,64 @@ def build_retailer_search_urls(clean_term: str, user_input: str) -> dict[str, st
     }
 
 
-def resolve_base_price(title: str) -> Decimal:
-    """Intelligently determine the benchmark market MRP for a searched product."""
-    t_clean = re.sub(r"[^a-z0-9 ]", " ", title.lower())
-    for key in sorted(KNOWN_PRODUCTS.keys(), key=lambda k: len(k), reverse=True):
-        if all(w in t_clean for w in key.split()):
-            return KNOWN_PRODUCTS[key]
+def resolve_base_price(title: str, db: Optional[Any] = None) -> Optional[Decimal]:
+    """Intelligently determine the benchmark market price for a searched product.
 
-    # Smart TVs
-    if any(w in t_clean for w in ["tv", "television", "bravia", "oled", "qled"]):
-        inch_m = re.search(r"(\d{2})\s*(?:inch|in|\"|\b)", t_clean)
-        inch = int(inch_m.group(1)) if inch_m else 0
-        is_oled = "oled" in t_clean
-        if inch >= 75:
-            return Decimal("119900.00")
-        elif inch >= 65:
-            return Decimal("149900.00") if is_oled else Decimal("59900.00")
-        elif inch >= 55:
-            return Decimal("99900.00") if is_oled else Decimal("39900.00")
-        elif inch >= 43:
-            return Decimal("26900.00")
-        elif inch >= 32:
-            return Decimal("12990.00")
-        return Decimal("34900.00")
+    1. Checks if a matching product exists in the local database with price observations.
+    2. Checks KNOWN_PRODUCTS using strict model-aware matching (excluding model conflicts).
+    3. If no reliable price is found in trusted data sources, returns None.
+       Never returns generic fallback prices (e.g. 69900 or 2499) that make different products appear identical.
+    """
+    from app.services.search_matcher import match_product
 
-    # Cameras
-    if any(w in t_clean for w in ["camera", "dslr", "mirrorless", "eos", "alpha"]):
-        if any(b in t_clean for b in ["dslr", "eos", "mirrorless", "canon", "sony", "nikon"]):
-            return Decimal("54990.00")
-        return Decimal("42990.00")
+    # 1. Check local database if session is provided
+    if db is not None:
+        try:
+            from app.models.product import Product
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
 
-    # Tablets
-    if any(w in t_clean for w in ["ipad", "tablet", "tab"]):
-        if "pro" in t_clean:
-            return Decimal("89900.00")
-        if "air" in t_clean:
-            return Decimal("59900.00")
-        return Decimal("32900.00")
+            prods = db.scalars(
+                select(Product).options(selectinload(Product.observations))
+            ).all()
+            best_db_score = 0
+            best_db_price = None
+            for p in prods:
+                m1, s1, r1 = match_product(title, p.name)
+                m2, s2, r2 = match_product(p.name, title)
+                if (not m1 and "Conflict" in (r1 or "")) or (not m2 and "Conflict" in (r2 or "")):
+                    continue
+                effective_match = m1 or (m2 and s2 >= 70)
+                effective_score = max(s1, s2) if (m1 or m2) else 0
+                if effective_match and effective_score >= 70 and effective_score > best_db_score and p.observations:
+                    latest = max(p.observations, key=lambda o: (o.observed_at, o.id or 0))
+                    if latest and latest.price:
+                        best_db_score = effective_score
+                        best_db_price = latest.price
+            if best_db_price is not None:
+                return best_db_price
+        except Exception:
+            pass
 
-    # Laptops
-    if any(w in t_clean for w in ["laptop", "macbook", "notebook", "thinkpad", "zenbook", "yoga"]):
-        if "gaming" in t_clean or "rtx" in t_clean:
-            return Decimal("74900.00")
-        return Decimal("54900.00")
+    # 2. Check KNOWN_PRODUCTS using model-aware matching
+    best_score = 0
+    best_known_price = None
+    for key, price in KNOWN_PRODUCTS.items():
+        m1, s1, r1 = match_product(title, key)
+        m2, s2, r2 = match_product(key, title)
+        if (not m1 and "Conflict" in (r1 or "")) or (not m2 and "Conflict" in (r2 or "")):
+            continue
+        effective_match = m1 or (m2 and s2 >= 70)
+        effective_score = max(s1, s2) if (m1 or m2) else 0
+        if effective_match and effective_score >= 70 and effective_score > best_score:
+            best_score = effective_score
+            best_known_price = price
 
-    # Phones
-    if any(w in t_clean for w in ["phone", "iphone", "galaxy", "smartphone", "pixel", "oneplus", "redmi", "realme", "motorola"]):
-        if "iphone" in t_clean:
-            return Decimal("69900.00")
-        if "ultra" in t_clean or "fold" in t_clean:
-            return Decimal("119999.00")
-        return Decimal("28999.00")
+    if best_known_price is not None:
+        return best_known_price
 
-    # Footwear
-    if any(w in t_clean for w in ["shoe", "shoes", "sneakers", "sneaker", "boots", "sandals", "jordan"]):
-        if "jordan" in t_clean:
-            return Decimal("12995.00")
-        if any(b in t_clean for b in ["nike", "adidas", "puma", "asics", "new balance"]):
-            return Decimal("4495.00")
-        return Decimal("2995.00")
-
-    # Smartwatches
-    if any(w in t_clean for w in ["watch", "smartwatch"]):
-        if "apple" in t_clean:
-            return Decimal("39900.00")
-        return Decimal("3499.00")
-
-    # Audio
-    if any(w in t_clean for w in ["headphone", "headphones", "headset", "audio"]):
-        return Decimal("4999.00")
-    if any(w in t_clean for w in ["earbuds", "airdopes", "tws", "earphone", "earphones"]):
-        return Decimal("1999.00")
-
-    # Peripherals
-    if any(w in t_clean for w in ["mouse", "keyboard", "monitor", "display"]):
-        if "monitor" in t_clean or "display" in t_clean:
-            return Decimal("14999.00")
-        return Decimal("1299.00")
-
-    if any(w in t_clean for w in ["bottle", "flask", "cup", "mug"]):
-        return Decimal("499.00")
-
-    return Decimal("2499.00")
+    # 3. No reliable price found in trusted data source
+    return None
 
 
 def _query_serpapi_shopping(
@@ -371,15 +439,32 @@ def _query_serpapi_shopping(
     source_platform: str,
     api_key: str,
     currency: str,
+    db: Optional[Any] = None,
 ) -> Optional[UniversalSearchOut]:
-    """Query live Google Shopping via SerpApi with strict product & accessory validation."""
+    """Query live Google Shopping via SerpApi with strict model and variant validation.
+
+    - Preserves exact model numbers and variants in the query.
+    - Validates every returned result against the requested model; excludes model conflicts.
+    - Reads each price strictly from its own response item; never copies between products.
+    - Preserves retailer, currency, product URL, and fetch timestamp.
+    """
     try:
         import httpx
+        from app.services.search_matcher import match_product, extract_model_identifiers
 
-        clean_q = re.sub(r"\b(dp|p|ref|sr|sprefix|keywords|qid)\b.*", "", extracted_title, flags=re.IGNORECASE).strip()
-        expected_base = resolve_base_price(clean_q)
+        now_iso = datetime.now(timezone.utc).isoformat()
 
-        q_tokens = [w for w in re.sub(r"[^a-z0-9]", " ", clean_q.lower()).split() if len(w) > 2 and w not in {"the", "and", "with", "for", "black", "blue", "white", "silver", "gold"}]
+        # 1. Exact query preservation: do not mutate or coerce model numbers
+        if is_url:
+            clean_q = re.sub(r"\b(dp|p|ref|sr|sprefix|keywords|qid)\b.*", "", extracted_title, flags=re.IGNORECASE).strip()
+            clean_q = re.sub(r"\s+", " ", clean_q).strip()
+        else:
+            clean_q = re.sub(r"\s+", " ", user_input).strip()
+
+        if not clean_q:
+            clean_q = extracted_title.strip()
+
+        q_info = extract_model_identifiers(clean_q)
 
         params = {
             "engine": "google_shopping",
@@ -398,278 +483,183 @@ def _query_serpapi_shopping(
             data = res.json()
             shopping_results = data.get("shopping_results", [])
             if not shopping_results:
-                return None
+                return UniversalSearchOut(
+                    input_query=user_input,
+                    extracted_title=clean_q,
+                    is_url=is_url,
+                    source_platform=source_platform,
+                    cheapest_store="Price unavailable",
+                    lowest_price=None,
+                    highest_price=None,
+                    max_savings=None,
+                    savings_percentage=0.0,
+                    recommendation_summary=f"No results found on Google Shopping for '{clean_q}'.",
+                    data_source="Live Google Shopping API",
+                    is_live_api=True,
+                    stores=[],
+                    has_reliable_match=False,
+                    fetched_at=now_iso,
+                )
 
-            verified_live_items = []
-            valid_prices_found = []
+            store_quotes_map: dict[str, StoreQuote] = {}
 
             for item in shopping_results:
-                source = item.get("source", "").strip()
+                source = (item.get("source") or "").strip()
                 if not source:
                     continue
                 s_lower = source.lower()
 
-                # Filter A: Excluded seller domains (foreign cross-border aggregators with 300% markups)
+                # Filter A: Excluded seller domains (cross-border aggregators with 300% markups)
                 if any(domain in s_lower for domain in EXCLUDED_SELLER_DOMAINS):
                     continue
 
-                # Filter B: Accessory sellers (cases, skins, custom backplates, toys)
+                # Filter B: Accessory sellers (cases, skins, custom backplates)
                 if any(acc in s_lower for acc in ACCESSORY_SELLER_KEYWORDS):
                     continue
 
-                item_link = item.get("link", "").lower()
+                item_link = (item.get("link") or item.get("product_link") or "").lower()
                 if any(domain in item_link for domain in EXCLUDED_SELLER_DOMAINS):
                     continue
 
-                item_title = item.get("title", "")
+                item_title = (item.get("title") or "").strip()
+                if not item_title:
+                    continue
                 title_lower = item_title.lower()
 
                 # Filter C: Reject accessories (skins, covers, cases, earpads, stickers, etc.)
                 if any(re.search(rf"\b{re.escape(w)}\b", title_lower) for w in ACCESSORY_BLACKLIST):
                     continue
 
-                # Filter D: Reject refurbished / used / pre-owned goods
-                if any(re.search(rf"\b{re.escape(w)}\b", title_lower) for w in REFURBISHED_KEYWORDS):
-                    continue
-
-                # Filter E: Reject mismatched models (e.g. WF earbuds vs WH headphones)
-                if "wh-" in clean_q.lower() or "wh " in clean_q.lower():
-                    if "wf-" in title_lower or "wf " in title_lower or "in-ear" in title_lower or "earbuds" in title_lower:
+                # Filter D: Reject refurbished / used / pre-owned goods unless query asked for them
+                if "refurbished" not in clean_q.lower() and "renewed" not in clean_q.lower():
+                    if any(re.search(rf"\b{re.escape(w)}\b", title_lower) for w in REFURBISHED_KEYWORDS):
                         continue
 
-                # Filter F: Model tier confusion (pro/plus/max/ultra/mini/air)
-                q_clean_lower = f" {clean_q.lower()} "
-                if " pro " not in q_clean_lower and " plus " not in q_clean_lower and " max " not in q_clean_lower and " ultra " not in q_clean_lower:
-                    if " pro " in f" {title_lower} " or " plus " in f" {title_lower} " or " max " in f" {title_lower} " or " ultra " in f" {title_lower} ":
-                        continue
-                if " air " in q_clean_lower and (" pro " in f" {title_lower} " or " mini " in f" {title_lower} "):
+                # Filter E: Audio model tier confusion (e.g. WF earbuds vs WH headphones)
+                if ("wh-" in clean_q.lower() or "wh " in clean_q.lower()) and ("wf-" in title_lower or "wf " in title_lower or "earbuds" in title_lower or "in-ear" in title_lower):
                     continue
 
-                # Filter G: Critical numeric model tokens check
-                num_tokens = [tok for tok in q_tokens if re.search(r"\d", tok)]
-                if num_tokens:
-                    if not any(num_tok in title_lower for num_tok in num_tokens):
-                        continue
-
-                raw_price = item.get("extracted_price")
-                if raw_price is None:
+                # Filter F: Strict Model & Generation Conflict Checking
+                # Validate every returned result against requested product model
+                # Searching for "iPhone 16" MUST NOT match "iPhone 18"
+                is_m, m_score, reason = match_product(clean_q, item_title)
+                if not is_m or m_score == 0:
                     continue
+
+                c_info = extract_model_identifiers(item_title)
+
+                # Variant matching: if query does not specify a variant (base model), candidate must not be pro/max/plus/ultra
+                if not q_info["variants"] and c_info["variants"]:
+                    continue
+                # If query specifies variants, candidate must contain them
+                if q_info["variants"] and not q_info["variants"].intersection(c_info["variants"]):
+                    continue
+                # If query specifies storage, candidate must not conflict
+                if q_info["storage"] and c_info["storage"] and not q_info["storage"].intersection(c_info["storage"]):
+                    continue
+
+                # Parse price strictly from this item's own response data
+                price_val, item_curr = parse_serpapi_price(item, default_currency=currency)
+
+                store_code, emoji = get_store_metadata(source)
+                product_url = item.get("link") or item.get("product_link") or ""
+                delivery_text = item.get("delivery") or "Standard Delivery"
                 try:
-                    price_val = Decimal(f"{float(raw_price):.2f}")
+                    rating_val = float(item.get("rating", 4.5))
                 except Exception:
-                    continue
+                    rating_val = 4.5
 
-                # Filter H: Hard price sanity bounds relative to benchmark
-                # Must not be < 45% (accessory/part) or > 185% (cross-border markup or top-spec mismatch)
-                if price_val < expected_base * Decimal("0.45") or price_val > expected_base * Decimal("1.85"):
-                    continue
+                candidate_quote = StoreQuote(
+                    store_name=source,
+                    store_code=store_code,
+                    store_badge_emoji=emoji,
+                    price=price_val,
+                    currency=item_curr,
+                    in_stock=True,
+                    delivery_info=delivery_text,
+                    rating=rating_val,
+                    is_lowest=False,
+                    difference_from_lowest=None,
+                    store_url=product_url,
+                    matched_product_title=item_title,
+                    fetched_at=now_iso,
+                )
 
-                valid_prices_found.append(price_val)
-                verified_live_items.append({
-                    "source": source,
-                    "title": item_title,
-                    "price": price_val,
-                    "link": item.get("link", ""),
-                    "delivery": item.get("delivery", "Standard 2-Day Delivery"),
-                    "rating": float(item.get("rating", 4.5)),
-                })
-
-            # Derive Consensus Market Anchor Price
-            if valid_prices_found:
-                median_price = Decimal(f"{float(statistics.median(valid_prices_found)):.2f}")
-                if expected_base * Decimal("0.45") <= median_price <= expected_base * Decimal("1.80"):
-                    anchor_base = median_price
+                # If retailer already seen: keep the quote with lower price (or valid price over None)
+                if store_code in store_quotes_map:
+                    existing = store_quotes_map[store_code]
+                    if existing.price is None and candidate_quote.price is not None:
+                        store_quotes_map[store_code] = candidate_quote
+                    elif (
+                        existing.price is not None
+                        and candidate_quote.price is not None
+                        and candidate_quote.price < existing.price
+                    ):
+                        store_quotes_map[store_code] = candidate_quote
                 else:
-                    anchor_base = expected_base
+                    store_quotes_map[store_code] = candidate_quote
+
+            stores = list(store_quotes_map.values())
+            if not stores:
+                return UniversalSearchOut(
+                    input_query=user_input,
+                    extracted_title=clean_q,
+                    is_url=is_url,
+                    source_platform=source_platform,
+                    cheapest_store="Price unavailable",
+                    lowest_price=None,
+                    highest_price=None,
+                    max_savings=None,
+                    savings_percentage=0.0,
+                    recommendation_summary=f"No matching retailer listings found for '{clean_q}'. Results conflicting on model/generation were excluded.",
+                    data_source="Live Google Shopping API",
+                    is_live_api=True,
+                    stores=[],
+                    has_reliable_match=False,
+                    fetched_at=now_iso,
+                )
+
+            # Sort stores by price (valid prices first in ascending order, then unpriced items)
+            stores.sort(key=lambda s: (0 if s.price is not None else 1, s.price or Decimal("999999999"), s.store_name))
+
+            priced_stores = [s for s in stores if s.price is not None]
+            if priced_stores:
+                lowest_price = priced_stores[0].price
+                highest_price = max(s.price for s in priced_stores)
+                max_savings = highest_price - lowest_price
+                savings_pct = (
+                    round(float((max_savings / highest_price) * Decimal("100")), 2)
+                    if highest_price > 0
+                    else 0.0
+                )
+                cheapest_store_name = priced_stores[0].store_name
+
+                for s in stores:
+                    if s.price is not None:
+                        s.is_lowest = (s.price == lowest_price)
+                        s.difference_from_lowest = s.price - lowest_price
+                    else:
+                        s.is_lowest = False
+                        s.difference_from_lowest = None
+
+                summary = (
+                    f"Live Retailer Comparison: Best price for {clean_q} found at {cheapest_store_name} "
+                    f"({priced_stores[0].currency} {lowest_price:.2f}). "
+                    f"Save up to {priced_stores[0].currency} {max_savings:.2f} ({savings_pct}%) across {len(priced_stores)} verified retailer listings."
+                )
+                has_reliable = True
             else:
-                anchor_base = expected_base
-
-            # Build consistent quotes for the 8 premier Indian retailers calibrated to anchor_base
-            clean_search_q = clean_product_search_term(extracted_title)
-            store_links = build_retailer_search_urls(clean_search_q, user_input)
-
-            premier_dict = {
-                "amazon": StoreQuote(
-                    store_name="Amazon India",
-                    store_code="amazon",
-                    store_badge_emoji="🛒",
-                    price=Decimal(f"{float(anchor_base * Decimal('0.985')):.2f}"),
-                    currency=currency,
-                    in_stock=True,
-                    delivery_info="Prime 1-Day Delivery",
-                    rating=4.6,
-                    is_lowest=False,
-                    difference_from_lowest=Decimal("0.00"),
-                    store_url=store_links["amazon"],
-                    matched_product_title=extracted_title,
-                ),
-                "flipkart": StoreQuote(
-                    store_name="Flipkart",
-                    store_code="flipkart",
-                    store_badge_emoji="🛍️",
-                    price=Decimal(f"{float(anchor_base * Decimal('0.990')):.2f}"),
-                    currency=currency,
-                    in_stock=True,
-                    delivery_info="Flipkart Plus · Free Delivery",
-                    rating=4.5,
-                    is_lowest=False,
-                    difference_from_lowest=Decimal("0.00"),
-                    store_url=store_links["flipkart"],
-                    matched_product_title=extracted_title,
-                ),
-                "croma": StoreQuote(
-                    store_name="Croma Electronics",
-                    store_code="croma",
-                    store_badge_emoji="🏬",
-                    price=Decimal(f"{float(anchor_base * Decimal('0.975')):.2f}"),
-                    currency=currency,
-                    in_stock=True,
-                    delivery_info="Express In-Store Pickup or 2-Day Delivery",
-                    rating=4.6,
-                    is_lowest=False,
-                    difference_from_lowest=Decimal("0.00"),
-                    store_url=store_links["croma"],
-                    matched_product_title=extracted_title,
-                ),
-                "reliance": StoreQuote(
-                    store_name="Reliance Digital",
-                    store_code="reliance",
-                    store_badge_emoji="📱",
-                    price=Decimal(f"{float(anchor_base * Decimal('1.010')):.2f}"),
-                    currency=currency,
-                    in_stock=True,
-                    delivery_info="Standard 2-Day Delivery",
-                    rating=4.3,
-                    is_lowest=False,
-                    difference_from_lowest=Decimal("0.00"),
-                    store_url=store_links["reliance"],
-                    matched_product_title=extracted_title,
-                ),
-                "tatacliq": StoreQuote(
-                    store_name="Tata CLiQ",
-                    store_code="tatacliq",
-                    store_badge_emoji="🏷️",
-                    price=Decimal(f"{float(anchor_base * Decimal('0.980')):.2f}"),
-                    currency=currency,
-                    in_stock=True,
-                    delivery_info="Tata CLiQ Express Delivery",
-                    rating=4.4,
-                    is_lowest=False,
-                    difference_from_lowest=Decimal("0.00"),
-                    store_url=store_links["tatacliq"],
-                    matched_product_title=extracted_title,
-                ),
-                "vijaysales": StoreQuote(
-                    store_name="Vijay Sales",
-                    store_code="vijaysales",
-                    store_badge_emoji="📺",
-                    price=Decimal(f"{float(anchor_base * Decimal('0.970')):.2f}"),
-                    currency=currency,
-                    in_stock=True,
-                    delivery_info="Free Store Pickup & 2-Day Delivery",
-                    rating=4.5,
-                    is_lowest=False,
-                    difference_from_lowest=Decimal("0.00"),
-                    store_url=store_links["vijaysales"],
-                    matched_product_title=extracted_title,
-                ),
-                "jiomart": StoreQuote(
-                    store_name="JioMart",
-                    store_code="jiomart",
-                    store_badge_emoji="🏪",
-                    price=Decimal(f"{float(anchor_base * Decimal('0.995')):.2f}"),
-                    currency=currency,
-                    in_stock=True,
-                    delivery_info="JioMart Free Scheduled Delivery",
-                    rating=4.3,
-                    is_lowest=False,
-                    difference_from_lowest=Decimal("0.00"),
-                    store_url=store_links["jiomart"],
-                    matched_product_title=extracted_title,
-                ),
-                "poorvika": StoreQuote(
-                    store_name="Poorvika Mobiles",
-                    store_code="poorvika",
-                    store_badge_emoji="📲",
-                    price=Decimal(f"{float(anchor_base * Decimal('1.015')):.2f}"),
-                    currency=currency,
-                    in_stock=True,
-                    delivery_info="2-Hour Express Delivery",
-                    rating=4.4,
-                    is_lowest=False,
-                    difference_from_lowest=Decimal("0.00"),
-                    store_url=store_links["poorvika"],
-                    matched_product_title=extracted_title,
-                ),
-            }
-
-            # Update specific premier stores with exact live quotes from SerpApi
-            for it in verified_live_items:
-                s_lower = it["source"].lower()
-                target_code = None
-                if "amazon" in s_lower:
-                    target_code = "amazon"
-                elif "flipkart" in s_lower:
-                    target_code = "flipkart"
-                elif "croma" in s_lower:
-                    target_code = "croma"
-                elif "reliance" in s_lower:
-                    target_code = "reliance"
-                elif "tata" in s_lower or "cliq" in s_lower:
-                    target_code = "tatacliq"
-                elif "vijay" in s_lower:
-                    target_code = "vijaysales"
-                elif "jio" in s_lower:
-                    target_code = "jiomart"
-                elif "poorvika" in s_lower:
-                    target_code = "poorvika"
-
-                if target_code and target_code in premier_dict:
-                    diff_ratio = abs(it["price"] - anchor_base) / anchor_base
-                    if diff_ratio <= Decimal("0.25"):
-                        premier_dict[target_code].price = it["price"]
-                        if it.get("link") and it["link"].startswith("http"):
-                            premier_dict[target_code].store_url = it["link"]
-                        if it.get("delivery"):
-                            premier_dict[target_code].delivery_info = it["delivery"]
-                        premier_dict[target_code].rating = it["rating"]
-                        premier_dict[target_code].matched_product_title = it.get("title") or extracted_title
-
-            quotes = list(premier_dict.values())
-            lowest_price = min(q.price for q in quotes)
-            highest_price = max(q.price for q in quotes)
-            max_savings = highest_price - lowest_price
-            savings_pct = (
-                round(float((max_savings / highest_price) * Decimal("100")), 2)
-                if highest_price > 0
-                else 0.0
-            )
-            cheapest_store_name = ""
-
-            processed: List[StoreQuote] = []
-            for q in quotes:
-                is_low = q.price == lowest_price
-                if is_low and not cheapest_store_name:
-                    cheapest_store_name = q.store_name
-                diff = q.price - lowest_price
-                q.is_lowest = is_low
-                q.difference_from_lowest = diff
-                processed.append(q)
-
-            data_source_label = (
-                "Live Google Shopping API (Calibrated Consensus)"
-                if valid_prices_found
-                else "Multi-Store Exact-Product Retailer Engine"
-            )
-
-            summary = (
-                f"Same-Product Arbitrage: Best deal for {extracted_title} found at {cheapest_store_name} ({currency} {lowest_price:.2f}). "
-                f"Save up to {currency} {max_savings:.2f} ({savings_pct}%) compared to highest retailer!"
-            )
+                lowest_price = None
+                highest_price = None
+                max_savings = None
+                savings_pct = 0.0
+                cheapest_store_name = "Price unavailable"
+                summary = f"Price unavailable for '{clean_q}'. Listed retailers did not provide parseable pricing."
+                has_reliable = False
 
             return UniversalSearchOut(
                 input_query=user_input,
-                extracted_title=extracted_title,
+                extracted_title=clean_q,
                 is_url=is_url,
                 source_platform=source_platform,
                 cheapest_store=cheapest_store_name,
@@ -678,9 +668,11 @@ def _query_serpapi_shopping(
                 max_savings=max_savings,
                 savings_percentage=savings_pct,
                 recommendation_summary=summary,
-                data_source=data_source_label,
+                data_source="Live Google Shopping API",
                 is_live_api=True,
-                stores=processed,
+                stores=stores,
+                has_reliable_match=has_reliable,
+                fetched_at=now_iso,
             )
     except Exception:
         return None
@@ -692,11 +684,32 @@ def _generate_offline_search_quotes(
     is_url: bool,
     source_platform: str,
     currency: str,
+    db: Optional[Any] = None,
 ) -> UniversalSearchOut:
     """Generate exact same product quotes across premier Indian retailers: Amazon, Flipkart, Croma, Reliance Digital."""
-    base = resolve_base_price(extracted_title)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    base = resolve_base_price(extracted_title, db=db)
     clean_search_q = clean_product_search_term(extracted_title)
     store_links = build_retailer_search_urls(clean_search_q, user_input)
+
+    if base is None:
+        return UniversalSearchOut(
+            input_query=user_input,
+            extracted_title=extracted_title,
+            is_url=is_url,
+            source_platform=source_platform,
+            cheapest_store="Price unavailable",
+            lowest_price=None,
+            highest_price=None,
+            max_savings=None,
+            savings_percentage=0.0,
+            recommendation_summary=f"No reliable price data found for '{extracted_title}'. Price unavailable in trusted data source.",
+            data_source="No verified price available in project data source",
+            is_live_api=False,
+            stores=[],
+            has_reliable_match=False,
+            fetched_at=now_iso,
+        )
 
     quotes = [
         StoreQuote(
@@ -712,6 +725,7 @@ def _generate_offline_search_quotes(
             difference_from_lowest=Decimal("0.00"),
             store_url=store_links["amazon"],
             matched_product_title=extracted_title,
+            fetched_at=now_iso,
         ),
         StoreQuote(
             store_name="Flipkart",
@@ -726,6 +740,7 @@ def _generate_offline_search_quotes(
             difference_from_lowest=Decimal("0.00"),
             store_url=store_links["flipkart"],
             matched_product_title=extracted_title,
+            fetched_at=now_iso,
         ),
         StoreQuote(
             store_name="Croma Electronics",
@@ -740,6 +755,7 @@ def _generate_offline_search_quotes(
             difference_from_lowest=Decimal("0.00"),
             store_url=store_links["croma"],
             matched_product_title=extracted_title,
+            fetched_at=now_iso,
         ),
         StoreQuote(
             store_name="Reliance Digital",
@@ -754,6 +770,7 @@ def _generate_offline_search_quotes(
             difference_from_lowest=Decimal("0.00"),
             store_url=store_links["reliance"],
             matched_product_title=extracted_title,
+            fetched_at=now_iso,
         ),
         StoreQuote(
             store_name="Tata CLiQ",
@@ -768,6 +785,7 @@ def _generate_offline_search_quotes(
             difference_from_lowest=Decimal("0.00"),
             store_url=store_links["tatacliq"],
             matched_product_title=extracted_title,
+            fetched_at=now_iso,
         ),
         StoreQuote(
             store_name="Vijay Sales",
@@ -782,6 +800,7 @@ def _generate_offline_search_quotes(
             difference_from_lowest=Decimal("0.00"),
             store_url=store_links["vijaysales"],
             matched_product_title=extracted_title,
+            fetched_at=now_iso,
         ),
         StoreQuote(
             store_name="JioMart",
@@ -796,6 +815,7 @@ def _generate_offline_search_quotes(
             difference_from_lowest=Decimal("0.00"),
             store_url=store_links["jiomart"],
             matched_product_title=extracted_title,
+            fetched_at=now_iso,
         ),
         StoreQuote(
             store_name="Poorvika Mobiles",
@@ -810,6 +830,7 @@ def _generate_offline_search_quotes(
             difference_from_lowest=Decimal("0.00"),
             store_url=store_links["poorvika"],
             matched_product_title=extracted_title,
+            fetched_at=now_iso,
         ),
     ]
 
@@ -843,6 +864,7 @@ def _generate_offline_search_quotes(
                 difference_from_lowest=diff,
                 store_url=q.store_url,
                 matched_product_title=extracted_title,
+                fetched_at=now_iso,
             )
         )
 
@@ -865,4 +887,5 @@ def _generate_offline_search_quotes(
         data_source="Multi-Store Exact-Product Retailer Engine",
         is_live_api=False,
         stores=processed,
+        fetched_at=now_iso,
     )

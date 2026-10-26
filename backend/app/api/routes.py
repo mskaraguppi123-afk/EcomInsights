@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -37,13 +38,29 @@ def health_check() -> HealthResponse:
 
 
 @router.get("/products", response_model=list[ProductSummary], tags=["products"])
-def list_products(db: Session = Depends(get_db)) -> list[ProductSummary]:
-    """List products and include the latest recorded price for each one."""
-    products = db.scalars(
-        select(Product)
-        .options(selectinload(Product.observations))
-        .order_by(Product.name)
-    ).all()
+def list_products(
+    search: Optional[str] = Query(None, description="Search products by model or keyword"),
+    q: Optional[str] = Query(None, description="Search products query alias"),
+    category: Optional[str] = Query(None, description="Filter products by category"),
+    db: Session = Depends(get_db),
+) -> list[ProductSummary]:
+    """List products and include the latest recorded price for each one.
+
+    Supports model-specific search matching. Excludes products with conflicting
+    model numbers or generations (e.g. searching 'iPhone 16' will not return 'iPhone 18').
+    Ranks exact name/model matches ahead of partial matches.
+    """
+    stmt = select(Product).options(selectinload(Product.observations))
+    if category and category.upper() != "ALL":
+        stmt = stmt.where(Product.category == category)
+    stmt = stmt.order_by(Product.name)
+
+    products = list(db.scalars(stmt).all())
+
+    query_str = (search or q or "").strip()
+    if query_str:
+        from app.services.search_matcher import rank_and_filter_products
+        products = rank_and_filter_products(query_str, products, name_attr="name")
 
     results: list[ProductSummary] = []
     for product in products:
@@ -384,7 +401,13 @@ def universal_product_search(
     db: Session = Depends(get_db),
 ) -> UniversalSearchOut:
     """Compare prices across multiple e-commerce stores from an Amazon/Flipkart URL or keyword query and automatically record the search and best price in the database catalog."""
-    result = search_and_compare_product(query)
+    result = search_and_compare_product(query, db=db)
+
+    # If the product has no verified price in trusted sources, do not invent records in DB
+    if not result.has_reliable_match or result.lowest_price is None:
+        result.db_updated = False
+        result.db_action = "no_verified_price"
+        return result
 
     # Automatically persist/update product and price checkpoint in the database
     try:

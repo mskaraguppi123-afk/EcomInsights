@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 
 web_router = APIRouter()
 
-DASHBOARD_HTML = """<!DOCTYPE html>
+DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -539,6 +539,85 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="toast" id="toast"></div>
 
   <script>
+    function extractModelIdentifiers(text) {
+      if (!text) return { normalized: '', tokens: [], numbers: new Set(), modelCodes: new Set(), families: {}, variants: new Set() };
+      const norm = text.toLowerCase().replace(/[\-_/+,|:;*#()\[\]{}'"`~!?@$%^&=<>]/g, ' ').replace(/\s+/g, ' ').trim();
+      const tokens = norm.split(' ').filter(Boolean);
+      const numbers = new Set(norm.match(/\b\d+\b/g) || []);
+      const modelCodes = new Set(norm.match(/\b(?:[a-z]+\d+|\d+[a-z]+[a-z0-9]*)\b/g) || []);
+
+      const families = {};
+      const iphoneM = norm.match(/\biphone\s+(\d+|se|x|xs|xr)\b/);
+      if (iphoneM) families.iphone = iphoneM[1];
+      const galaxySM = norm.match(/\b(?:galaxy\s+)?s\s*(\d+)\b/);
+      if (galaxySM) families.galaxy_s = galaxySM[1];
+      const ipadM = norm.match(/\bipad\s+(mini|air|pro|\d+)\b/);
+      if (ipadM) families.ipad = ipadM[1];
+      const sonyWhM = norm.match(/\bwh\s*(\d+[a-z0-9]+)\b/);
+      if (sonyWhM) families.sony_wh = sonyWhM[1];
+
+      const variants = new Set();
+      ['pro max', 'pro', 'plus', 'mini', 'ultra', 'fe', 'air'].forEach(v => {
+        if (new RegExp(`\\b${v}\\b`).test(norm)) variants.add(v);
+      });
+
+      return { normalized: norm, tokens, numbers, modelCodes, families, variants };
+    }
+
+    function matchProduct(query, candidateName) {
+      if (!query || !query.trim()) return { matched: true, score: 50 };
+      const q = extractModelIdentifiers(query);
+      const c = extractModelIdentifiers(candidateName);
+
+      // 1. Model family conflict: e.g. iPhone 16 must not match iPhone 18
+      for (const [fam, qVal] of Object.entries(q.families)) {
+        if (c.families[fam] && qVal !== c.families[fam]) {
+          return { matched: false, score: 0 };
+        }
+      }
+
+      // 2. Standalone number conflict
+      if (q.numbers.size > 0) {
+        for (const num of q.numbers) {
+          if (!c.numbers.has(num)) {
+            return { matched: false, score: 0 };
+          }
+        }
+      }
+
+      // 3. Model code conflict
+      if (q.modelCodes.size > 0 && c.modelCodes.size > 0) {
+        for (const code of q.modelCodes) {
+          if (!c.modelCodes.has(code)) return { matched: false, score: 0 };
+        }
+      }
+
+      // 4. Variant conflict: if query requested pro but candidate has no pro
+      if (q.variants.size > 0) {
+        let hasVariant = false;
+        for (const v of q.variants) {
+          if (c.variants.has(v)) hasVariant = true;
+        }
+        if (!hasVariant) return { matched: false, score: 0 };
+      }
+
+      const fillers = new Set(['the', 'and', 'with', 'for', 'in', 'by', 'apple']);
+      const sigQ = q.tokens.filter(t => !fillers.has(t));
+      const sigC = new Set(c.tokens.filter(t => !fillers.has(t)));
+
+      if (q.normalized === c.normalized) return { matched: true, score: 100 };
+      if (sigQ.length > 0 && sigQ.every(t => sigC.has(t))) {
+        let extraVariants = 0;
+        c.variants.forEach(v => { if (!q.variants.has(v)) extraVariants++; });
+        return { matched: true, score: extraVariants > 0 ? 70 : 90 };
+      }
+
+      const overlap = sigQ.filter(t => sigC.has(t));
+      const ratio = sigQ.length > 0 ? overlap.length / sigQ.length : 0;
+      if (ratio >= 0.75) return { matched: true, score: Math.round(ratio * 75) };
+      return { matched: false, score: 0 };
+    }
+
     let allProducts = [];
     let currentCategory = 'ALL';
 
@@ -586,19 +665,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     function renderProducts() {
-      const query = searchInput.value.toLowerCase();
-      const filtered = allProducts.filter(p => {
-        const matchesQuery = p.name.toLowerCase().includes(query);
-        const matchesCat = currentCategory === 'ALL' || p.category === currentCategory;
-        return matchesQuery && matchesCat;
-      });
+      const query = searchInput.value.trim();
+      const filtered = allProducts
+        .filter(p => {
+          const match = matchProduct(query, p.name);
+          const matchesCat = currentCategory === 'ALL' || p.category === currentCategory;
+          return match.matched && matchesCat;
+        })
+        .sort((a, b) => {
+          if (!query) return 0;
+          const scoreA = matchProduct(query, a.name).score;
+          const scoreB = matchProduct(query, b.name).score;
+          return scoreB - scoreA;
+        });
 
       if (filtered.length === 0) {
-        grid.innerHTML = '<p style="color:var(--text-muted); grid-column: 1/-1;">No matching products found.</p>';
+        grid.innerHTML = '<p style="color:var(--text-muted); grid-column: 1/-1; padding:24px; text-align:center;">No matching products found for your search criteria.</p>';
         return;
       }
 
-      grid.innerHTML = filtered.map(p => `
+      grid.innerHTML = filtered.map(p => {
+        const hasPrice = p.latest_price !== null && p.latest_price !== undefined;
+        const priceDisplay = hasPrice ? `₹${parseFloat(p.latest_price).toLocaleString('en-IN')}` : 'Price unavailable';
+        return `
         <div class="card" onclick="openProduct(${p.id})">
           <div class="card-top">
             <span class="card-category">${p.category || 'General'}</span>
@@ -606,15 +695,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
           <div class="card-title">${p.name}</div>
           <div class="price-tag">
-            <span class="price-currency">${p.currency === 'INR' ? '₹' : p.currency}</span>
-            <span>${p.latest_price || 'N/A'}</span>
+            <span style="font-size:${hasPrice ? '22px' : '15px'}; color:${hasPrice ? 'var(--primary)' : 'var(--text-muted)'}; font-weight:700;">${priceDisplay}</span>
           </div>
           <div class="card-meta">
             <span>Last seen: ${p.last_observed_at ? new Date(p.last_observed_at).toLocaleDateString() : 'N/A'}</span>
             <span class="view-link">View History →</span>
           </div>
         </div>
-      `).join('');
+      `;
+      }).join('');
     }
 
     let currentModalProductId = null;
@@ -729,13 +818,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         document.getElementById('modalTitle').innerText = p.name;
         document.getElementById('modalCategory').innerText = p.category || 'General';
 
-        const prices = p.observations.map(o => parseFloat(o.price));
-        const minP = Math.min(...prices);
-        const maxP = Math.max(...prices);
+        const prices = (p.observations && p.observations.length > 0) ? p.observations.map(o => parseFloat(o.price)) : [];
+        const hasPrices = prices.length > 0;
+        const minP = hasPrices ? Math.min(...prices) : null;
+        const maxP = hasPrices ? Math.max(...prices) : null;
 
-        document.getElementById('statCurrent').innerText = '₹' + p.latest_price;
-        document.getElementById('statLowest').innerText = '₹' + minP.toFixed(2);
-        document.getElementById('statHighest').innerText = '₹' + maxP.toFixed(2);
+        const hasLatest = p.latest_price !== null && p.latest_price !== undefined;
+        document.getElementById('statCurrent').innerText = hasLatest ? '₹' + parseFloat(p.latest_price).toLocaleString('en-IN') : 'Price unavailable';
+        document.getElementById('statLowest').innerText = minP !== null ? '₹' + minP.toFixed(2) : 'N/A';
+        document.getElementById('statHighest').innerText = maxP !== null ? '₹' + maxP.toFixed(2) : 'N/A';
 
         const insightSec = document.getElementById('insightSection');
         if (p.insight) {
@@ -841,6 +932,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                         ₹${parseFloat(s.price).toFixed(2)}
                       </div>
                       <div style="font-size:11px; color:var(--text-muted);">${s.delivery_info}</div>
+                  ${s.fetched_at ? `<div style="font-size:10px; color:#88958f; margin-top:2px;">Checked: ${new Date(s.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>` : ''}
                       ${s.is_lowest ? '<div style="font-size:11px; color:#1f7359; font-weight:700; margin-top:6px;">✓ Best Deal Selected</div>' : `<div style="font-size:11px; color:#dc3545; font-weight:600; margin-top:6px;">+₹${parseFloat(s.difference_from_lowest).toFixed(2)} higher</div>`}
                     </div>
                   `).join('')}
@@ -1044,6 +1136,62 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           showToast(`✓ Automatically ${act} catalog (Product ID: ${data.tracked_product_id})`);
         }
 
+        const hasReliable = data.has_reliable_match && data.lowest_price !== null && data.stores && data.stores.length > 0;
+
+        let actionButtonHtml = '';
+        if (data.tracked_product_id) {
+          actionButtonHtml = `
+            <button type="button" class="btn btn-primary" onclick="openProduct(${data.tracked_product_id})" style="padding:6px 14px; font-size:12px; font-weight:700; background:#1f7359; color:white; border:none; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:6px;">
+              <span>📈</span> View Price Graph & AI Forecast →
+            </button>
+          `;
+        } else if (hasReliable) {
+          actionButtonHtml = `
+            <button type="button" class="btn btn-primary" id="btnTrackUniversal" style="padding:6px 12px; font-size:11px;">
+              ➕ Track in Catalog
+            </button>
+          `;
+        }
+
+        let storeGridHtml = '';
+        if (!hasReliable) {
+          storeGridHtml = `
+            <div style="text-align:center; padding:24px 16px; background:#fff; border:1px dashed #d5ddd8; border-radius:10px;">
+              <div style="fontSize:28px; margin-bottom:8px;">🔎</div>
+              <div style="font-size:15px; font-weight:800; color:#18231f;">Price Unavailable / No Reliable Match</div>
+              <p style="font-size:13px; color:#6e7d75; margin:6px 0 0;">
+                ${data.recommendation_summary || 'No verified price data found in trusted data sources.'}
+              </p>
+            </div>
+          `;
+        } else {
+          storeGridHtml = `
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:10px;">
+              ${data.stores.map(s => `
+                <div style="border:${s.is_lowest ? '2px solid #1f7359' : '1px solid #e5eae7'}; background:${s.is_lowest ? '#ffffff' : '#fafcfb'}; border-radius:8px; padding:12px; position:relative;">
+                  ${s.is_lowest ? '<span style="position:absolute; top:-8px; right:8px; background:#1f7359; color:#fff; font-size:9px; font-weight:800; padding:2px 6px; border-radius:4px; text-transform:uppercase;">Lowest Price</span>' : ''}
+                  <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:13px; font-weight:700; color:var(--text);">${s.store_badge_emoji} ${s.store_name}</span>
+                    <span style="font-size:11px; color:#888;">★ ${s.rating}</span>
+                  </div>
+                  <div style="font-size:11px; color:var(--primary); font-weight:600; margin:3px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                    📦 ${s.matched_product_title || data.extracted_title}
+                  </div>
+                  <div style="font-size:17px; font-weight:800; color:${s.is_lowest ? '#1f7359' : 'var(--text)'}; margin:6px 0 4px;">
+                    ${s.price !== null && s.price !== undefined ? '₹' + parseFloat(s.price).toFixed(2) : 'Price unavailable'}
+                  </div>
+                  <div style="font-size:11px; color:var(--text-muted);">${s.delivery_info}</div>
+                  ${s.fetched_at ? `<div style="font-size:10px; color:#88958f; margin-top:2px;">Checked: ${new Date(s.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>` : ''}
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                    ${s.is_lowest ? '<span style="font-size:11px; color:#1f7359; font-weight:700;">✓ Best Deal</span>' : (s.difference_from_lowest !== null && s.difference_from_lowest !== undefined ? `<span style="font-size:11px; color:#dc3545; font-weight:600;">+₹${parseFloat(s.difference_from_lowest).toFixed(2)}</span>` : '')}
+                    <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:11px; color:var(--primary); font-weight:700; text-decoration:none;">Visit Store →</a>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          `;
+        }
+
         universalResult.innerHTML = `
           <div style="background:#f7fbf9; border:1px solid #cce2d6; border-radius:10px; padding:16px;">
             <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
@@ -1059,15 +1207,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     ✓ Saved to Database (${data.db_action})
                   </span>
                 ` : ''}
-                ${data.tracked_product_id ? `
-                  <button type="button" class="btn btn-primary" onclick="openProduct(${data.tracked_product_id})" style="padding:6px 14px; font-size:12px; font-weight:700; background:#1f7359; color:white; border:none; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:6px;">
-                    <span>📈</span> View Price Graph & AI Forecast →
-                  </button>
-                ` : `
-                  <button type="button" class="btn btn-primary" id="btnTrackUniversal" style="padding:6px 12px; font-size:11px;">
-                    ➕ Track in Catalog
-                  </button>
-                `}
+                ${actionButtonHtml}
               </div>
             </div>
 
@@ -1075,28 +1215,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               💡 <strong>${data.recommendation_summary}</strong>
             </div>
 
-            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:10px;">
-              ${data.stores.map(s => `
-                <div style="border:${s.is_lowest ? '2px solid #1f7359' : '1px solid #e5eae7'}; background:${s.is_lowest ? '#ffffff' : '#fafcfb'}; border-radius:8px; padding:12px; position:relative;">
-                  ${s.is_lowest ? '<span style="position:absolute; top:-8px; right:8px; background:#1f7359; color:#fff; font-size:9px; font-weight:800; padding:2px 6px; border-radius:4px; text-transform:uppercase;">Lowest Price</span>' : ''}
-                  <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="font-size:13px; font-weight:700; color:var(--text);">${s.store_badge_emoji} ${s.store_name}</span>
-                    <span style="font-size:11px; color:#888;">★ ${s.rating}</span>
-                  </div>
-                  <div style="font-size:11px; color:var(--primary); font-weight:600; margin:3px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                    📦 ${s.matched_product_title || data.extracted_title}
-                  </div>
-                  <div style="font-size:17px; font-weight:800; color:${s.is_lowest ? '#1f7359' : 'var(--text)'}; margin:6px 0 4px;">
-                    ₹${parseFloat(s.price).toFixed(2)}
-                  </div>
-                  <div style="font-size:11px; color:var(--text-muted);">${s.delivery_info}</div>
-                  <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
-                    ${s.is_lowest ? '<span style="font-size:11px; color:#1f7359; font-weight:700;">✓ Best Deal</span>' : `<span style="font-size:11px; color:#dc3545; font-weight:600;">+₹${parseFloat(s.difference_from_lowest).toFixed(2)}</span>`}
-                    <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:11px; color:var(--primary); font-weight:700; text-decoration:none;">Visit Store →</a>
-                  </div>
-                </div>
-              `).join('')}
-            </div>
+            ${storeGridHtml}
           </div>
         `;
 
