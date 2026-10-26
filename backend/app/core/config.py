@@ -10,13 +10,17 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./ecominsights.db"
     cors_origins: str = "http://localhost:5173"
     serpapi_api_key: str | None = None
+    trusted_retailers: str = "amazon,flipkart"
 
     model_config = SettingsConfigDict(env_file=("../.env", ".env"), extra="ignore")
-
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def trusted_retailer_list(self) -> list[str]:
+        return [origin.strip().lower() for origin in self.trusted_retailers.split(",") if origin.strip()]
 
 
 @lru_cache

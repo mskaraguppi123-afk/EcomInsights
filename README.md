@@ -74,10 +74,15 @@ Open <http://localhost:5173> in your browser.
 3. **Pure SVG Trajectory & Forecast Visualization:**
    - Visualizes price checkpoints and dotted forecast projections without external heavy charting libraries.
 4. **Complete Unit Test Coverage:**
-   - 7 automated tests in `backend/tests/test_api.py` validating endpoints and ML integration.
+   - 37 automated tests in `backend/tests/test_api.py` validating endpoints, exact model matching, price plausibility, and retailer allowlists.
+5. **Configurable Trusted Retailer Allowlist & Domain Verification:**
+   - Restricts search results strictly to allowlisted, verified retailers (starts with Amazon India and Flipkart for India).
+   - Verifies retailer identity from actual URL/domain, rejecting lookalike typos (`amaz0n.in`), prefix scams (`flipkart-deals.in`), and unknown shops.
+   - For configuration details, see [TRUSTED_RETAILERS.md](./docs/TRUSTED_RETAILERS.md).
 
 ## Viva Defense Guide & Project Documentation
 
 For viva preparation, architecture diagrams, mathematical equations, and the top 15 examiner questions with answers, see:
 - [VIVA_DEFENSE_REPORT.md](./VIVA_DEFENSE_REPORT.md)
+- [TRUSTED_RETAILERS.md](./docs/TRUSTED_RETAILERS.md)
 

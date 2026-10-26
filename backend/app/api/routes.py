@@ -398,10 +398,15 @@ def generate_price_trajectory(
 )
 def universal_product_search(
     query: str = Query(..., min_length=2, description="Product URL or keyword query"),
+    trusted_retailers: Optional[str] = Query(
+        None,
+        description="Optional comma-separated allowlist of retailer codes (e.g. 'amazon,flipkart' or 'amazon,flipkart,croma')",
+    ),
     db: Session = Depends(get_db),
 ) -> UniversalSearchOut:
     """Compare prices across multiple e-commerce stores from an Amazon/Flipkart URL or keyword query and automatically record the search and best price in the database catalog."""
-    result = search_and_compare_product(query, db=db)
+    allowed_list = [r.strip().lower() for r in trusted_retailers.split(",") if r.strip()] if trusted_retailers else None
+    result = search_and_compare_product(query, db=db, trusted_retailers=allowed_list)
 
     # If the product has no verified price in trusted sources, do not invent records in DB
     if not result.has_reliable_match or result.lowest_price is None:

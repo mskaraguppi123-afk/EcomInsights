@@ -572,7 +572,7 @@ export default function App() {
               style={{
                 fontSize: '13px',
                 color: '#18231f',
-                marginBottom: '16px',
+                marginBottom: '12px',
                 background: '#ffffff',
                 padding: '12px 16px',
                 borderRadius: '8px',
@@ -583,10 +583,85 @@ export default function App() {
               💡 <strong>{universalResult.recommendation_summary}</strong>
             </div>
 
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' }}>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  background: universalResult.amazon_found ? '#e8f5e9' : '#fff3e0',
+                  color: universalResult.amazon_found ? '#1b5e20' : '#b78103',
+                  border: `1px solid ${universalResult.amazon_found ? '#c8e6c9' : '#ffe0b2'}`,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                🛒 Amazon India: {universalResult.amazon_found ? '✓ Verified Listing' : '✕ Not found in search results'}
+              </span>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  background: universalResult.flipkart_found ? '#e8f5e9' : '#fff3e0',
+                  color: universalResult.flipkart_found ? '#1b5e20' : '#b78103',
+                  border: `1px solid ${universalResult.flipkart_found ? '#c8e6c9' : '#ffe0b2'}`,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                🛍️ Flipkart: {universalResult.flipkart_found ? '✓ Verified Listing' : '✕ Not found in search results'}
+              </span>
+              {universalResult.comparable_spec && (
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: '700',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    background: '#e3f2fd',
+                    color: '#0d47a1',
+                    border: '1px solid #bbdefb',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  🎯 Specification Tier: {universalResult.comparable_spec}
+                </span>
+              )}
+              {universalResult.comparable_condition && (
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: '700',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    background: universalResult.comparable_condition.toLowerCase().includes('refurb') ? '#fff3e0' : '#f3e5f5',
+                    color: universalResult.comparable_condition.toLowerCase().includes('refurb') ? '#e65100' : '#6a1b9a',
+                    border: `1px solid ${universalResult.comparable_condition.toLowerCase().includes('refurb') ? '#ffe0b2' : '#e1bee7'}`,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  🏷️ Condition: {universalResult.comparable_condition}
+                </span>
+              )}
+            </div>
+
             {(!universalResult.has_reliable_match || universalResult.lowest_price === null || universalResult.stores.length === 0) ? (
               <div style={{ textAlign: 'center', padding: '24px 16px', background: '#fff', border: '1px dashed #d5ddd8', borderRadius: '10px' }}>
                 <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔎</div>
-                <div style={{ fontSize: '15px', fontWeight: '800', color: '#18231f' }}>Price Unavailable / No Reliable Match</div>
+                <div style={{ fontSize: '15px', fontWeight: '800', color: '#18231f' }}>
+                  {universalResult.cheapest_store.includes('trusted') || universalResult.cheapest_store.includes('comparable') || universalResult.cheapest_store.includes('found')
+                    ? 'No Trusted Comparable Listings Found'
+                    : 'Price Unavailable / No Reliable Match'}
+                </div>
                 <p style={{ fontSize: '13px', color: '#6e7d75', margin: '6px 0 0' }}>
                   {universalResult.recommendation_summary || `No verified price data found for '${universalResult.extracted_title}' in trusted data sources.`}
                 </p>
@@ -595,17 +670,17 @@ export default function App() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '12px' }}>
                 {universalResult.stores.map((s) => (
                   <div
-                    key={s.store_name}
+                    key={`${s.store_name}-${s.price || 'na'}`}
                     style={{
-                      border: s.is_lowest ? '2px solid #1f7359' : '1px solid #e0e6e2',
-                      background: s.is_lowest ? '#ffffff' : '#fafcfb',
+                      border: s.is_lowest && universalResult.is_comparable_comparison && universalResult.max_savings !== null ? '2px solid #1f7359' : (s.price_status === 'excluded' ? '1px dashed #e57373' : '1px solid #e0e6e2'),
+                      background: s.is_lowest && universalResult.is_comparable_comparison && universalResult.max_savings !== null ? '#ffffff' : (s.price_status === 'excluded' ? '#fffaf9' : '#fafcfb'),
                       borderRadius: '10px',
                       padding: '14px',
                       position: 'relative',
-                      boxShadow: s.is_lowest ? '0 4px 12px rgba(31,115,89,0.08)' : 'none',
+                      boxShadow: s.is_lowest && universalResult.is_comparable_comparison && universalResult.max_savings !== null ? '0 4px 12px rgba(31,115,89,0.08)' : 'none',
                     }}
                   >
-                    {s.is_lowest && (
+                    {s.is_lowest && universalResult.is_comparable_comparison && universalResult.max_savings !== null && (
                       <span
                         style={{
                           position: 'absolute',
@@ -624,41 +699,103 @@ export default function App() {
                       </span>
                     )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '14px', fontWeight: '700', color: '#18231f' }}>
-                        {s.store_badge_emoji} {s.store_name}
-                      </span>
+                      <a
+                        href={s.store_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontSize: '14px', fontWeight: '700', color: '#18231f', textDecoration: 'none' }}
+                        title="Click to visit store directly"
+                      >
+                        {s.store_badge_emoji} {s.store_name} <span style={{ fontSize: '11px', color: '#1f7359' }}>↗</span>
+                      </a>
                       <span style={{ fontSize: '12px', color: '#77827d' }}>★ {s.rating}</span>
                     </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                      {s.condition && (
+                        <span
+                          style={{
+                            fontSize: '10px',
+                            fontWeight: '700',
+                            background: s.condition.toLowerCase().includes('refurb') ? '#fff3e0' : '#f3e5f5',
+                            color: s.condition.toLowerCase().includes('refurb') ? '#b78103' : '#6a1b9a',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            border: `1px solid ${s.condition.toLowerCase().includes('refurb') ? '#ffe0b2' : '#e1bee7'}`,
+                          }}
+                        >
+                          {s.condition}
+                        </span>
+                      )}
+                      {s.variant_spec && (
+                        <span
+                          style={{
+                            fontSize: '10px',
+                            fontWeight: '700',
+                            background: s.is_comparable ? '#e8f5e9' : '#fff3e0',
+                            color: s.is_comparable ? '#1b5e20' : '#b78103',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            border: `1px solid ${s.is_comparable ? '#c8e6c9' : '#ffe0b2'}`,
+                          }}
+                        >
+                          {s.variant_spec}
+                        </span>
+                      )}
+                      {!s.is_comparable && s.price_status === 'verified' && (
+                        <span style={{ fontSize: '10px', color: '#b78103', fontWeight: '600' }}>
+                          (Different variant/condition)
+                        </span>
+                      )}
+                      {s.price_status === 'excluded' && (
+                        <span style={{ fontSize: '10px', color: '#c0392b', fontWeight: '700' }}>
+                          ⚠️ Excluded Outlier
+                        </span>
+                      )}
+                    </div>
                     <div style={{ fontSize: '11px', color: '#1f7359', fontWeight: '600', marginTop: '4px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                      📦 {s.matched_product_title || universalResult.extracted_title}
+                      <a
+                        href={s.store_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: 'inherit', textDecoration: 'none' }}
+                        title={s.matched_product_title || universalResult.extracted_title}
+                      >
+                        📦 {s.matched_product_title || universalResult.extracted_title}
+                      </a>
                     </div>
                     <div
                       style={{
                         fontSize: '20px',
                         fontWeight: '800',
-                        color: s.is_lowest ? '#1f7359' : '#18231f',
+                        color: s.price_status === 'excluded' ? '#c0392b' : (s.is_lowest && universalResult.is_comparable_comparison && universalResult.max_savings !== null ? '#1f7359' : '#18231f'),
                         margin: '8px 0 4px',
                       }}
                     >
-                      {s.price !== null && s.price !== undefined
-                        ? `₹${parseFloat(s.price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                        : 'Price unavailable'}
+                      {s.price_status === 'excluded'
+                        ? 'Price not verified'
+                        : (s.price !== null && s.price !== undefined
+                          ? `${s.currency === 'USD' ? '$' : '₹'}${parseFloat(s.price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                          : 'Price unavailable')}
                     </div>
-                    <div style={{ fontSize: '11px', color: '#77827d' }}>{s.delivery_info}</div>
+                    <div style={{ fontSize: '11px', color: s.in_stock ? '#77827d' : '#c0392b', fontWeight: s.in_stock ? 'normal' : '600' }}>
+                      {s.in_stock ? s.delivery_info : `⚠️ ${s.delivery_info}`}
+                    </div>
                     {s.fetched_at && (
                       <div style={{ fontSize: '10px', color: '#88958f', marginTop: '2px' }}>
                         Checked: {new Date(s.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </div>
                     )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #f0f3f1' }}>
-                      {s.is_lowest ? (
+                      {s.is_lowest && universalResult.is_comparable_comparison && universalResult.max_savings !== null ? (
                         <span style={{ fontSize: '12px', color: '#1f7359', fontWeight: '700' }}>✓ Best Deal</span>
-                      ) : (
+                      ) : s.price_status === 'excluded' ? (
+                        <span style={{ fontSize: '11px', color: '#c0392b', fontWeight: '600' }}>Excluded outlier</span>
+                      ) : s.difference_from_lowest !== null && s.difference_from_lowest !== undefined ? (
                         <span style={{ fontSize: '12px', color: '#dc3545', fontWeight: '600' }}>
-                          {s.difference_from_lowest !== null && s.difference_from_lowest !== undefined
-                            ? `+₹${parseFloat(s.difference_from_lowest).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                            : 'N/A'}
+                          {`+₹${parseFloat(s.difference_from_lowest).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                         </span>
+                      ) : (
+                        <span style={{ fontSize: '11px', color: '#1f7359', fontWeight: '600' }}>Verified listing</span>
                       )}
                       <a
                         href={s.store_url}
@@ -1037,15 +1174,28 @@ export default function App() {
                         </span>
                       )}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#192620' }}>
-                          {s.store_badge_emoji} {s.store_name}
-                        </span>
+                        <a
+                          href={s.store_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ fontSize: '13px', fontWeight: '700', color: '#192620', textDecoration: 'none' }}
+                          title="Click to visit store directly"
+                        >
+                          {s.store_badge_emoji} {s.store_name} <span style={{ fontSize: '10px', color: '#1f7359' }}>↗</span>
+                        </a>
                         <span style={{ fontSize: '11px', color: '#888' }}>★ {s.rating}</span>
                       </div>
                       <div style={{ fontSize: '17px', fontWeight: '800', color: s.is_lowest ? '#1f7359' : '#192620', margin: '6px 0 4px' }}>
-                        ₹{parseFloat(s.price).toFixed(2)}
+                        {s.price !== null && s.price !== undefined ? `₹${parseFloat(s.price).toFixed(2)}` : 'Price unavailable'}
                       </div>
-                      <div style={{ fontSize: '11px', color: '#7a8781' }}>{s.delivery_info}</div>
+                      <div style={{ fontSize: '11px', color: s.in_stock ? '#7a8781' : '#c0392b', fontWeight: s.in_stock ? 'normal' : '600' }}>
+                        {s.in_stock ? s.delivery_info : `⚠️ ${s.delivery_info}`}
+                      </div>
+                      {s.fetched_at && (
+                        <div style={{ fontSize: '10px', color: '#88958f', marginTop: '2px' }}>
+                          Checked: {new Date(s.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', paddingTop: '6px', borderTop: '1px solid #f0f3f1' }}>
                         {s.is_lowest ? (
                           <span style={{ fontSize: '11px', color: '#1f7359', fontWeight: '700' }}>✓ Best Deal</span>

@@ -13,7 +13,7 @@ from typing import Any, Optional, Sequence, Tuple
 
 
 def normalize_search_text(text: str) -> str:
-    """Normalize harmless differences: lowercasing, extra spaces, and common punctuation."""
+    """Normalize harmless differences: lowercasing, extra spaces, brand aliases, and common punctuation."""
     if not text:
         return ""
     t = text.lower().strip()
@@ -21,6 +21,11 @@ def normalize_search_text(text: str) -> str:
     t = re.sub(r"[\-_/+,|:;*#]", " ", t)
     # Remove symbols that don't carry model information
     t = re.sub(r"[()\[\]{}'\"`~!?@$%^&=<>]", " ", t)
+    # Normalize brand aliases: Motorola -> Moto, collapse duplicate Moto
+    t = re.sub(r"\bmotorola\b", "moto", t)
+    t = re.sub(r"\bmoto\s+moto\b", "moto", t)
+    # Normalize common letter-number model code spacing: e.g. "g 96" -> "g96", "s 24" -> "s24"
+    t = re.sub(r"\b(g|s|m|z|a|x|y|v|fe|se|wh|wf|gt)\s+(\d{1,4}[a-z]?)\b", r"\1\2", t)
     # Normalize multiple whitespaces
     return re.sub(r"\s+", " ", t).strip()
 
@@ -33,8 +38,13 @@ def extract_model_identifiers(text: str) -> dict[str, Any]:
 
     # Standalone numbers (e.g. "16", "18", "15", "10", "9")
     numbers = set(re.findall(r"\b\d+\b", norm))
+    # Extract embedded numbers from alphanumeric model codes (e.g. "96" in "g96", "85" in "g85", "24" in "s24")
+    # Exclude technical unit metrics like 128gb, 5000mah, 120hz, 50mp
+    for code in re.findall(r"\b[a-z]{1,3}(\d+)\b", norm):
+        if not re.search(rf"\b{code}(?:gb|tb|mb|hz|mah|mp|w)\b", norm):
+            numbers.add(code)
 
-    # Alphanumeric model codes (e.g. "1000xm4", "1000xm5", "s24", "s23", "m1", "m2", "m3", "128gb", "256gb")
+    # Alphanumeric model codes (e.g. "1000xm4", "1000xm5", "s24", "s23", "m1", "m2", "m3", "g96", "g85")
     model_codes = set(re.findall(r"\b(?:[a-z]+\d+|\d+[a-z]+[a-z0-9]*)\b", norm))
 
     # Product line families with specific model numbers
@@ -43,11 +53,16 @@ def extract_model_identifiers(text: str) -> dict[str, Any]:
         (r"\biphone\s+(\d+|se|x|xs|xr)\b", "iphone"),
         (r"\b(?:galaxy\s+)?s\s*(\d+)\b", "galaxy_s"),
         (r"\b(?:galaxy\s+)?z\s*(fold|flip)\s*(\d+)?\b", "galaxy_z"),
+        (r"\b(?:galaxy\s+)?m\s*(\d+)\b", "galaxy_m"),
+        (r"\b(?:galaxy\s+)?a\s*(\d+)\b", "galaxy_a"),
         (r"\bpixel\s+(\d+[a-z]?)\b", "pixel"),
         (r"\boneplus\s+(\d+[a-z]?)\b", "oneplus"),
         (r"\bipad\s+(mini|air|pro|\d+)\b", "ipad"),
         (r"\bwh\s*(\d+[a-z0-9]+)\b", "sony_wh"),
         (r"\bwf\s*(\d+[a-z0-9]+)\b", "sony_wf"),
+        (r"\b(?:moto\s+)?g\s*(\d+)\b", "moto_g"),
+        (r"\b(?:moto\s+)?e\s*(\d+)\b", "moto_e"),
+        (r"\b(?:moto\s+)?edge\s*(\d+)\b", "moto_edge"),
     ]
     for pattern, fam_name in family_patterns:
         m = re.search(pattern, norm)

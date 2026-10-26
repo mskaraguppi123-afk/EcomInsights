@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Set, Union
 from pydantic import BaseModel
 
 
@@ -18,6 +20,10 @@ class StoreQuote(BaseModel):
     store_url: str
     matched_product_title: Optional[str] = None
     fetched_at: Optional[str] = None
+    variant_spec: Optional[str] = None
+    is_comparable: bool = True
+    condition: str = "Brand New"
+    price_status: str = "verified"
 
 
 class MultiStoreComparisonOut(BaseModel):
@@ -242,8 +248,10 @@ class PoorvikaAdapter(BaseStoreAdapter):
 class CrossStoreArbitrageEngine:
     """Aggregates prices from registered store adapters and computes cross-store savings."""
 
-    def __init__(self):
-        self.adapters: List[BaseStoreAdapter] = [
+    def __init__(self, trusted_retailers: Optional[List[str] | Set[str]] = None):
+        from app.core.retailer_allowlist import get_active_trusted_retailers
+        active = get_active_trusted_retailers(trusted_retailers)
+        all_adapters: List[BaseStoreAdapter] = [
             AmazonAdapter(),
             FlipkartAdapter(),
             CromaAdapter(),
@@ -253,6 +261,11 @@ class CrossStoreArbitrageEngine:
             JioMartAdapter(),
             PoorvikaAdapter(),
         ]
+        self.adapters: List[BaseStoreAdapter] = [
+            a for a in all_adapters if a.store_code in active
+        ]
+        if not self.adapters:
+            self.adapters = [AmazonAdapter(), FlipkartAdapter()]
 
     def compare_product(
         self, product_id: int, product_name: str, base_price: Decimal, currency: str = "INR"

@@ -914,7 +914,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     <span style="font-size:12px; font-weight:700; color:var(--primary); text-transform:uppercase;">🏬 Multi-Store Price Comparison</span>
                     <span style="font-size:10px; font-weight:700; padding:2px 8px; border-radius:10px; ${comp.is_live_api ? 'background:#d4edd9; color:#155724;' : 'background:#e2e8e5; color:#314e41;'}">${comp.is_live_api ? '🟢 Live Google Shopping' : '🔌 Multi-Store Adapter Mode'}</span>
                   </div>
-                  <span style="font-size:11px; font-weight:700; background:#d4edd9; color:#155724; padding:3px 10px; border-radius:12px;">🏆 Best: ${comp.cheapest_store}</span>
+                  <span style="font-size:11px; font-weight:700; background:#d4edd9; color:#155724; padding:3px 10px; border-radius:12px;">🏆 ${comp.cheapest_store.includes('found') ? comp.cheapest_store : 'Best: ' + comp.cheapest_store}</span>
                 </div>
                 <div style="font-size:12px; color:var(--text); margin-bottom:12px; line-height:1.4; background:#f4f8f5; padding:8px 12px; border-radius:6px; border:1px solid #d5e5db;">
                   💡 <strong>${comp.recommendation_summary}</strong>
@@ -922,18 +922,27 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
                 <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:10px;">
                   ${comp.stores.map(s => `
-                    <div style="border:${s.is_lowest ? '2px solid #1f7359' : '1px solid #e5eae7'}; background:${s.is_lowest ? '#f7fbf9' : '#fff'}; border-radius:8px; padding:12px; position:relative;">
-                      ${s.is_lowest ? '<span style="position:absolute; top:-8px; right:8px; background:#1f7359; color:#fff; font-size:9px; font-weight:800; padding:2px 6px; border-radius:4px; text-transform:uppercase;">Lowest Price</span>' : ''}
+                    <div style="border:${s.is_lowest && comp.is_comparable_comparison && comp.max_savings !== null ? '2px solid #1f7359' : (s.price_status === 'excluded' ? '1px dashed #e57373' : '1px solid #e5eae7')}; background:${s.is_lowest && comp.is_comparable_comparison && comp.max_savings !== null ? '#f7fbf9' : (s.price_status === 'excluded' ? '#fffaf9' : '#fff')}; border-radius:8px; padding:12px; position:relative;">
+                      ${s.is_lowest && comp.is_comparable_comparison && comp.max_savings !== null ? '<span style="position:absolute; top:-8px; right:8px; background:#1f7359; color:#fff; font-size:9px; font-weight:800; padding:2px 6px; border-radius:4px; text-transform:uppercase;">Lowest Price</span>' : ''}
                       <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <span style="font-size:13px; font-weight:700; color:var(--text);">${s.store_badge_emoji} ${s.store_name}</span>
+                        <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:13px; font-weight:700; color:var(--text); text-decoration:none;" title="Click to visit store directly">${s.store_badge_emoji} ${s.store_name} <span style="font-size:10px; color:#1f7359;">↗</span></a>
                         <span style="font-size:11px; color:#888;">★ ${s.rating}</span>
                       </div>
-                      <div style="font-size:17px; font-weight:800; color:${s.is_lowest ? '#1f7359' : 'var(--text)'}; margin:6px 0 4px;">
-                        ₹${parseFloat(s.price).toFixed(2)}
+                      <div style="display:flex; align-items:center; gap:6px; margin-top:4px; flex-wrap:wrap;">
+                        ${s.condition ? `<span style="font-size:10px; font-weight:700; background:${s.condition.toLowerCase().includes('refurb') ? '#fff3e0' : '#f3e5f5'}; color:${s.condition.toLowerCase().includes('refurb') ? '#b78103' : '#6a1b9a'}; padding:2px 6px; border-radius:4px; border:1px solid ${s.condition.toLowerCase().includes('refurb') ? '#ffe0b2' : '#e1bee7'};">${s.condition}</span>` : ''}
+                        ${s.variant_spec ? `<span style="font-size:10px; font-weight:700; background:${s.is_comparable ? '#e8f5e9' : '#fff3e0'}; color:${s.is_comparable ? '#1b5e20' : '#b78103'}; padding:2px 6px; border-radius:4px; border:1px solid ${s.is_comparable ? '#c8e6c9' : '#ffe0b2'};">${s.variant_spec}</span>` : ''}
+                        ${!s.is_comparable && s.price_status === 'verified' ? `<span style="font-size:10px; color:#b78103; font-weight:600;">(Different variant/condition)</span>` : ''}
+                        ${s.price_status === 'excluded' ? `<span style="font-size:10px; color:#c0392b; font-weight:700;">⚠️ Excluded Outlier</span>` : ''}
                       </div>
-                      <div style="font-size:11px; color:var(--text-muted);">${s.delivery_info}</div>
-                  ${s.fetched_at ? `<div style="font-size:10px; color:#88958f; margin-top:2px;">Checked: ${new Date(s.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>` : ''}
-                      ${s.is_lowest ? '<div style="font-size:11px; color:#1f7359; font-weight:700; margin-top:6px;">✓ Best Deal Selected</div>' : `<div style="font-size:11px; color:#dc3545; font-weight:600; margin-top:6px;">+₹${parseFloat(s.difference_from_lowest).toFixed(2)} higher</div>`}
+                      <div style="font-size:17px; font-weight:800; color:${s.price_status === 'excluded' ? '#c0392b' : (s.is_lowest && comp.is_comparable_comparison && comp.max_savings !== null ? '#1f7359' : 'var(--text)')}; margin:6px 0 4px;">
+                        ${s.price_status === 'excluded' ? 'Price not verified' : (s.price !== null && s.price !== undefined ? '₹' + parseFloat(s.price).toFixed(2) : 'Price unavailable')}
+                      </div>
+                      <div style="font-size:11px; color:${s.in_stock ? 'var(--text-muted)' : '#c0392b'}; font-weight:${s.in_stock ? 'normal' : '600'};">${s.in_stock ? s.delivery_info : `⚠️ ${s.delivery_info}`}</div>
+                      ${s.fetched_at ? `<div style="font-size:10px; color:#88958f; margin-top:2px;">Checked: ${new Date(s.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>` : ''}
+                      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; padding-top:6px; border-top:1px solid #f0f3f1;">
+                        ${s.is_lowest && comp.is_comparable_comparison && comp.max_savings !== null ? '<div style="font-size:11px; color:#1f7359; font-weight:700;">✓ Best Deal Selected</div>' : (s.price_status === 'excluded' ? '<div style="font-size:11px; color:#c0392b; font-weight:600;">Excluded outlier</div>' : (s.difference_from_lowest !== null && s.difference_from_lowest !== undefined ? `<div style="font-size:11px; color:#dc3545; font-weight:600;">+₹${parseFloat(s.difference_from_lowest).toFixed(2)} higher</div>` : '<div style="font-size:11px; color:#1f7359; font-weight:600;">Verified listing</div>'))}
+                        <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:11px; color:var(--primary); font-weight:700; text-decoration:none;">Visit Store →</a>
+                      </div>
                     </div>
                   `).join('')}
                 </div>
@@ -1157,8 +1166,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         if (!hasReliable) {
           storeGridHtml = `
             <div style="text-align:center; padding:24px 16px; background:#fff; border:1px dashed #d5ddd8; border-radius:10px;">
-              <div style="fontSize:28px; margin-bottom:8px;">🔎</div>
-              <div style="font-size:15px; font-weight:800; color:#18231f;">Price Unavailable / No Reliable Match</div>
+              <div style="font-size:28px; margin-bottom:8px;">🔎</div>
+              <div style="font-size:15px; font-weight:800; color:#18231f;">${data.cheapest_store.includes('trusted') || data.cheapest_store.includes('comparable') || data.cheapest_store.includes('found') ? 'No Trusted Comparable Listings Found' : 'Price Unavailable / No Reliable Match'}</div>
               <p style="font-size:13px; color:#6e7d75; margin:6px 0 0;">
                 ${data.recommendation_summary || 'No verified price data found in trusted data sources.'}
               </p>
@@ -1168,22 +1177,30 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           storeGridHtml = `
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:10px;">
               ${data.stores.map(s => `
-                <div style="border:${s.is_lowest ? '2px solid #1f7359' : '1px solid #e5eae7'}; background:${s.is_lowest ? '#ffffff' : '#fafcfb'}; border-radius:8px; padding:12px; position:relative;">
-                  ${s.is_lowest ? '<span style="position:absolute; top:-8px; right:8px; background:#1f7359; color:#fff; font-size:9px; font-weight:800; padding:2px 6px; border-radius:4px; text-transform:uppercase;">Lowest Price</span>' : ''}
+                <div style="border:${s.is_lowest && data.is_comparable_comparison && data.max_savings !== null ? '2px solid #1f7359' : (s.price_status === 'excluded' ? '1px dashed #e57373' : '1px solid #e5eae7')}; background:${s.is_lowest && data.is_comparable_comparison && data.max_savings !== null ? '#ffffff' : (s.price_status === 'excluded' ? '#fffaf9' : '#fafcfb')}; border-radius:8px; padding:12px; position:relative;">
+                  ${s.is_lowest && data.is_comparable_comparison && data.max_savings !== null ? '<span style="position:absolute; top:-8px; right:8px; background:#1f7359; color:#fff; font-size:9px; font-weight:800; padding:2px 6px; border-radius:4px; text-transform:uppercase;">Lowest Price</span>' : ''}
                   <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="font-size:13px; font-weight:700; color:var(--text);">${s.store_badge_emoji} ${s.store_name}</span>
+                    <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:13px; font-weight:700; color:var(--text); text-decoration:none;" title="Click to visit store directly">${s.store_badge_emoji} ${s.store_name} <span style="font-size:10px; color:#1f7359;">↗</span></a>
                     <span style="font-size:11px; color:#888;">★ ${s.rating}</span>
                   </div>
+                  <div style="display:flex; align-items:center; gap:6px; margin-top:4px; flex-wrap:wrap;">
+                    ${s.condition ? `<span style="font-size:10px; font-weight:700; background:${s.condition.toLowerCase().includes('refurb') ? '#fff3e0' : '#f3e5f5'}; color:${s.condition.toLowerCase().includes('refurb') ? '#b78103' : '#6a1b9a'}; padding:2px 6px; border-radius:4px; border:1px solid ${s.condition.toLowerCase().includes('refurb') ? '#ffe0b2' : '#e1bee7'};">${s.condition}</span>` : ''}
+                    ${s.variant_spec ? `<span style="font-size:10px; font-weight:700; background:${s.is_comparable ? '#e8f5e9' : '#fff3e0'}; color:${s.is_comparable ? '#1b5e20' : '#b78103'}; padding:2px 6px; border-radius:4px; border:1px solid ${s.is_comparable ? '#c8e6c9' : '#ffe0b2'};">${s.variant_spec}</span>` : ''}
+                    ${!s.is_comparable && s.price_status === 'verified' ? `<span style="font-size:10px; color:#b78103; font-weight:600;">(Different variant/condition)</span>` : ''}
+                    ${s.price_status === 'excluded' ? `<span style="font-size:10px; color:#c0392b; font-weight:700;">⚠️ Excluded Outlier</span>` : ''}
+                  </div>
                   <div style="font-size:11px; color:var(--primary); font-weight:600; margin:3px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                    📦 ${s.matched_product_title || data.extracted_title}
+                    <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="color:inherit; text-decoration:none;" title="${s.matched_product_title || data.extracted_title}">
+                      📦 ${s.matched_product_title || data.extracted_title}
+                    </a>
                   </div>
-                  <div style="font-size:17px; font-weight:800; color:${s.is_lowest ? '#1f7359' : 'var(--text)'}; margin:6px 0 4px;">
-                    ${s.price !== null && s.price !== undefined ? '₹' + parseFloat(s.price).toFixed(2) : 'Price unavailable'}
+                  <div style="font-size:17px; font-weight:800; color:${s.price_status === 'excluded' ? '#c0392b' : (s.is_lowest && data.is_comparable_comparison && data.max_savings !== null ? '#1f7359' : 'var(--text)')}; margin:6px 0 4px;">
+                    ${s.price_status === 'excluded' ? 'Price not verified' : (s.price !== null && s.price !== undefined ? (s.currency === 'USD' ? '$' : '₹') + parseFloat(s.price).toFixed(2) : 'Price unavailable')}
                   </div>
-                  <div style="font-size:11px; color:var(--text-muted);">${s.delivery_info}</div>
+                  <div style="font-size:11px; color:${s.in_stock ? 'var(--text-muted)' : '#c0392b'}; font-weight:${s.in_stock ? 'normal' : '600'};">${s.in_stock ? s.delivery_info : `⚠️ ${s.delivery_info}`}</div>
                   ${s.fetched_at ? `<div style="font-size:10px; color:#88958f; margin-top:2px;">Checked: ${new Date(s.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>` : ''}
                   <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
-                    ${s.is_lowest ? '<span style="font-size:11px; color:#1f7359; font-weight:700;">✓ Best Deal</span>' : (s.difference_from_lowest !== null && s.difference_from_lowest !== undefined ? `<span style="font-size:11px; color:#dc3545; font-weight:600;">+₹${parseFloat(s.difference_from_lowest).toFixed(2)}</span>` : '')}
+                    ${s.is_lowest && data.is_comparable_comparison && data.max_savings !== null ? '<span style="font-size:11px; color:#1f7359; font-weight:700;">✓ Best Deal</span>' : (s.price_status === 'excluded' ? '<span style="font-size:11px; color:#c0392b; font-weight:600;">Excluded outlier</span>' : (s.difference_from_lowest !== null && s.difference_from_lowest !== undefined ? `<span style="font-size:11px; color:#dc3545; font-weight:600;">+₹${parseFloat(s.difference_from_lowest).toFixed(2)}</span>` : '<span style="font-size:11px; color:#1f7359; font-weight:600;">Verified listing</span>'))}
                     <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:11px; color:var(--primary); font-weight:700; text-decoration:none;">Visit Store →</a>
                   </div>
                 </div>
@@ -1191,6 +1208,27 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             </div>
           `;
         }
+
+        const retailerStatusHtml = `
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+            <span style="font-size:11px; font-weight:700; padding:4px 10px; border-radius:6px; background:${data.amazon_found ? '#e8f5e9' : '#fff3e0'}; color:${data.amazon_found ? '#1b5e20' : '#b78103'}; border:1px solid ${data.amazon_found ? '#c8e6c9' : '#ffe0b2'}; display:inline-flex; align-items:center; gap:4px;">
+              🛒 Amazon India: ${data.amazon_found ? '✓ Verified Listing' : '✕ Not found in search results'}
+            </span>
+            <span style="font-size:11px; font-weight:700; padding:4px 10px; border-radius:6px; background:${data.flipkart_found ? '#e8f5e9' : '#fff3e0'}; color:${data.flipkart_found ? '#1b5e20' : '#b78103'}; border:1px solid ${data.flipkart_found ? '#c8e6c9' : '#ffe0b2'}; display:inline-flex; align-items:center; gap:4px;">
+              🛍️ Flipkart: ${data.flipkart_found ? '✓ Verified Listing' : '✕ Not found in search results'}
+            </span>
+            ${data.comparable_spec ? `
+              <span style="font-size:11px; font-weight:700; padding:4px 10px; border-radius:6px; background:#e3f2fd; color:#0d47a1; border:1px solid #bbdefb; display:inline-flex; align-items:center; gap:4px;">
+                🎯 Specification Tier: ${data.comparable_spec}
+              </span>
+            ` : ''}
+            ${data.comparable_condition ? `
+              <span style="font-size:11px; font-weight:700; padding:4px 10px; border-radius:6px; background:${data.comparable_condition.toLowerCase().includes('refurb') ? '#fff3e0' : '#f3e5f5'}; color:${data.comparable_condition.toLowerCase().includes('refurb') ? '#e65100' : '#6a1b9a'}; border:1px solid ${data.comparable_condition.toLowerCase().includes('refurb') ? '#ffe0b2' : '#e1bee7'}; display:inline-flex; align-items:center; gap:4px;">
+                🏷️ Condition: ${data.comparable_condition}
+              </span>
+            ` : ''}
+          </div>
+        `;
 
         universalResult.innerHTML = `
           <div style="background:#f7fbf9; border:1px solid #cce2d6; border-radius:10px; padding:16px;">
@@ -1214,6 +1252,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             <div style="font-size:12px; color:var(--text); margin-bottom:12px; line-height:1.4; background:#ffffff; padding:10px 14px; border-radius:8px; border:1px solid #d5e5db;">
               💡 <strong>${data.recommendation_summary}</strong>
             </div>
+
+            ${retailerStatusHtml}
 
             ${storeGridHtml}
           </div>
