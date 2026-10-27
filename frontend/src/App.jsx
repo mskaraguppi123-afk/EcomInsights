@@ -598,7 +598,13 @@ export default function App() {
                   gap: '4px',
                 }}
               >
-                🛒 Amazon India: {universalResult.amazon_found ? '✓ Verified Listing' : '✕ Not found in search results'}
+                🛒 Amazon India: {universalResult.amazon_found
+                  ? '✓ Verified Listing'
+                  : (() => {
+                      const note = universalResult.retailer_status_notes?.find(n => n.toLowerCase().includes('amazon'));
+                      if (note && note.includes(':')) return `✕ ${note.split(':')[1].trim()}`;
+                      return '✕ Not found in search results';
+                    })()}
               </span>
               <span
                 style={{
@@ -614,7 +620,13 @@ export default function App() {
                   gap: '4px',
                 }}
               >
-                🛍️ Flipkart: {universalResult.flipkart_found ? '✓ Verified Listing' : '✕ Not found in search results'}
+                🛍️ Flipkart: {universalResult.flipkart_found
+                  ? '✓ Verified Listing'
+                  : (() => {
+                      const note = universalResult.retailer_status_notes?.find(n => n.toLowerCase().includes('flipkart'));
+                      if (note && note.includes(':')) return `✕ ${note.split(':')[1].trim()}`;
+                      return '✕ Not found in search results';
+                    })()}
               </span>
               {universalResult.comparable_spec && (
                 <span
@@ -653,6 +665,73 @@ export default function App() {
                 </span>
               )}
             </div>
+
+            {(!universalResult.amazon_found || !universalResult.flipkart_found) && universalResult.direct_retailer_links && (
+              <div
+                style={{
+                  marginBottom: '14px',
+                  padding: '10px 14px',
+                  background: '#f9fbf9',
+                  border: '1px solid #d5e5db',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  color: '#34453c',
+                }}
+              >
+                <div style={{ fontWeight: '700', marginBottom: '6px' }}>
+                  ℹ️ Store Discovery & Direct Links:
+                </div>
+                <div style={{ fontSize: '11px', color: '#66776e', marginBottom: '8px' }}>
+                  Live Google Shopping discovery may omit direct merchant listings. You can check live availability directly:
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {universalResult.direct_retailer_links.amazon && (
+                    <a
+                      href={universalResult.direct_retailer_links.amazon}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        color: '#1f7359',
+                        textDecoration: 'none',
+                        background: '#ffffff',
+                        border: '1px solid #1f7359',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                      }}
+                    >
+                      🛒 Search on Amazon.in ↗
+                    </a>
+                  )}
+                  {universalResult.direct_retailer_links.flipkart && (
+                    <a
+                      href={universalResult.direct_retailer_links.flipkart}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        color: '#1f7359',
+                        textDecoration: 'none',
+                        background: '#ffffff',
+                        border: '1px solid #1f7359',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                      }}
+                    >
+                      🛍️ Search on Flipkart ↗
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
 
             {(!universalResult.has_reliable_match || universalResult.lowest_price === null || universalResult.stores.length === 0) ? (
               <div style={{ textAlign: 'center', padding: '24px 16px', background: '#fff', border: '1px dashed #d5ddd8', borderRadius: '10px' }}>
