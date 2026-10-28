@@ -1,3 +1,11 @@
+import os
+import sys
+
+# Ensure backend root is on sys.path
+backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -723,8 +731,8 @@ def test_serpapi_amazon_flipkart_preference_and_status():
         assert res.flipkart_found is False
         # Amazon India must be ranked first due to priority sorting
         assert res.stores[0].store_name == "Amazon India"
-        # Retailer notes must state Flipkart was not found
-        assert any("Flipkart" in note and "Not found" in note for note in res.retailer_status_notes)
+        # Retailer notes must state Flipkart was not found / no results returned
+        assert any("Flipkart" in note and ("Not found" in note or "No results returned" in note) for note in res.retailer_status_notes)
 
 
 def test_serpapi_implausible_price_outlier_rejection():
@@ -1547,9 +1555,14 @@ def test_allowlist_configuration_helpers_and_settings():
     default_active = get_active_trusted_retailers()
     assert "amazon" in default_active
     assert "flipkart" in default_active
-    assert "croma" not in default_active
+    assert "croma" in default_active
+    assert "reliance" in default_active
 
-    # Enable Croma
+    # Disable Croma
+    assert disable_trusted_retailer("croma") is True
+    assert PREDEFINED_RETAILERS["croma"].enabled is False
+
+    # Re-enable Croma
     assert enable_trusted_retailer("croma") is True
     assert PREDEFINED_RETAILERS["croma"].enabled is True
 
@@ -1575,6 +1588,212 @@ def test_allowlist_configuration_helpers_and_settings():
     # Cleanup reset
     reset_trusted_retailers()
     del PREDEFINED_RETAILERS["customstore"]
+
+
+def test_serpapi_separate_targeted_retailer_discovery():
+    """Verify that when primary search lacks Amazon or Flipkart, separate targeted
+    queries are executed to discover retailer listings."""
+    from decimal import Decimal
+    from unittest.mock import patch, MagicMock
+    from app.services.link_search import _query_serpapi_shopping
+
+    # Primary query returns generic sponsored listings without Amazon or Flipkart
+    primary_items = [
+        {
+            "position": 1,
+            "title": "Apple iPhone 15 (128 GB) - Blue",
+            "source": "Vijay Sales",
+            "price": "₹64,900.00",
+            "extracted_price": 64900.0,
+            "link": "https://www.vijaysales.com/apple-iphone-15",
+        }
+    ]
+
+    # Targeted Amazon query returns authentic Amazon listing
+    amazon_items = [
+        {
+            "position": 1,
+            "title": "Apple iPhone 15 (128 GB) - Black",
+            "source": "Amazon.in",
+            "price": "₹63,999.00",
+            "extracted_price": 63999.0,
+            "link": "https://www.amazon.in/dp/B0CHX1W1XY",
+            "rating": 4.6,
+        }
+    ]
+
+    # Targeted Flipkart query returns authentic Flipkart listing
+    flipkart_items = [
+        {
+            "position": 1,
+            "title": "Apple iPhone 15 (Blue, 128 GB)",
+            "source": "Flipkart",
+            "price": "₹64,499.00",
+            "extracted_price": 64499.0,
+            "link": "https://dl.flipkart.com/dl/apple-iphone-15/p/itm",
+            "rating": 4.5,
+        }
+    ]
+
+    def mock_get(url, params=None, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        q = (params or {}).get("q", "").lower()
+        if "amazon" in q:
+            resp.json.return_value = {"shopping_results": amazon_items}
+        elif "flipkart" in q:
+            resp.json.return_value = {"shopping_results": flipkart_items}
+        else:
+            resp.json.return_value = {"shopping_results": primary_items}
+        return resp
+
+    with patch("httpx.Client.get", side_effect=mock_get):
+        res = _query_serpapi_shopping(
+            user_input="iPhone 15",
+            extracted_title="iPhone 15",
+            is_url=False,
+            source_platform="Keyword Query",
+            api_key="test_api_key",
+            currency="INR",
+            trusted_retailers=["amazon", "flipkart"],
+        )
+
+        assert res is not None
+        assert res.amazon_found is True
+        assert res.flipkart_found is True
+        assert len(res.stores) == 2
+        assert res.stores[0].store_name == "Amazon India"
+        assert res.stores[1].store_name == "Flipkart"
+        assert res.lowest_price == Decimal("63999.00")
+        assert res.max_savings == Decimal("500.00")
+        assert any("Amazon India: Verified listing included." in note for note in res.retailer_status_notes)
+        assert any("Flipkart: Verified listing included." in note for note in res.retailer_status_notes)
+        assert "amazon" in res.direct_retailer_links
+        assert "flipkart" in res.direct_retailer_links
+
+
+def test_serpapi_accurate_status_notes_for_accessories_and_outliers():
+    """Verify that accurate status reasons are reported for rejected accessories and price outliers."""
+    from unittest.mock import patch, MagicMock
+    from app.services.link_search import _query_serpapi_shopping
+
+    # Primary items: Amazon returns only phone cases; Flipkart returns an implausible outlier ₹1,899
+    primary_items = [
+        {
+            "position": 1,
+            "title": "Amazon Basics Shockproof Case for Apple iPhone 16",
+            "source": "Amazon.in",
+            "price": "₹399.00",
+            "extracted_price": 399.0,
+            "link": "https://www.amazon.in/dp/B0DCASE",
+        },
+        {
+            "position": 2,
+            "title": "Apple iPhone 16 128GB Complete Phone",
+            "source": "Flipkart",
+            "price": "₹1,899.00",
+            "extracted_price": 1899.0,
+            "link": "https://www.flipkart.com/apple-iphone-16",
+        },
+    ]
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"shopping_results": primary_items}
+
+    with patch("httpx.Client.get", return_value=mock_resp):
+        res = _query_serpapi_shopping(
+            user_input="iPhone 16",
+            extracted_title="iPhone 16",
+            is_url=False,
+            source_platform="Keyword Query",
+            api_key="test_api_key",
+            currency="INR",
+            trusted_retailers=["amazon", "flipkart"],
+        )
+
+        assert res is not None
+        assert res.amazon_found is False
+        assert res.flipkart_found is False
+        # Accurate status reason for Amazon (rejected as accessory)
+        assert any("Amazon India" in note and "accessories" in note for note in res.retailer_status_notes)
+        # Accurate status reason for Flipkart (rejected as outlier)
+        assert any("Flipkart" in note and "outlier" in note for note in res.retailer_status_notes)
+        # Direct retailer links must be provided
+        assert "amazon" in res.direct_retailer_links
+        assert "flipkart" in res.direct_retailer_links
+        assert any("direct" in note.lower() or "limited" in note.lower() for note in res.retailer_status_notes)
+
+
+def test_serpapi_title_matching_apple_iphone_15_matches_iphone_15():
+    """Verify that 'Apple iPhone 15' matches 'iPhone 15' across harmless formatting,
+    while 'iPhone 14' and accessories are rejected."""
+    from app.services.search_matcher import match_product
+    from app.services.link_search import is_unrelated_or_parts_item
+
+    # Harmless difference: Brand prefix 'Apple iPhone 15' vs query 'iPhone 15'
+    is_m, score, reason = match_product("iPhone 15", "Apple iPhone 15 (128 GB) - Blue")
+    assert is_m is True
+    assert score >= 70
+
+    # Model number conflict: iPhone 14 must not match iPhone 15
+    is_m14, score14, reason14 = match_product("iPhone 15", "Apple iPhone 14 (128 GB) - Midnight")
+    assert is_m14 is False
+    assert score14 == 0
+    assert "Conflicting" in reason14
+
+    # Accessory rejection: Case title rejected
+    is_bad, _ = is_unrelated_or_parts_item("Silicone Protective Case for Apple iPhone 15", "Amazon.in", "iPhone 15")
+    assert is_bad is True
+
+
+def test_serpapi_google_shopping_internal_links_versus_lookalike_domains():
+    """Verify domain verification accepts Google Shopping indexed listings while strictly
+    rejecting external lookalike domains."""
+    from app.core.retailer_allowlist import verify_retailer_from_url
+
+    # Google Shopping offer URL with authentic Amazon source
+    g_url = "https://www.google.co.in/search?ibp=oshop&q=iPhone+15&prds=catalogid:123"
+    ret_amz = verify_retailer_from_url(g_url, source_name="amazon.in")
+    assert ret_amz is not None
+    assert ret_amz.store_code == "amazon"
+
+    # Google Shopping offer URL with authentic Flipkart source
+    ret_fk = verify_retailer_from_url(g_url, source_name="Flipkart")
+    assert ret_fk is not None
+    assert ret_fk.store_code == "flipkart"
+
+    # External lookalike domain: must be rejected even if source says Amazon.in
+    fake_url = "https://amaz0n.in/apple-iphone-15/dp/12345"
+    ret_fake = verify_retailer_from_url(fake_url, source_name="Amazon.in")
+    assert ret_fake is None
+
+    # External lookalike Flipkart domain
+    fake_fk_url = "https://flipkart-deals.in/apple-iphone-15"
+    ret_fake_fk = verify_retailer_from_url(fake_fk_url, source_name="Flipkart")
+    assert ret_fake_fk is None
+
+
+def test_universal_search_ai_insight_pipeline(client):
+    """Verify that universal search computes and returns explainable ML price intelligence."""
+    res = client.get("/api/v1/search/universal?query=iPhone+15")
+    assert res.status_code == 200
+    data = res.json()
+    assert "ai_insight" in data
+    ai = data["ai_insight"]
+    assert ai is not None
+    assert "predicted_next_price" in ai
+    assert float(ai["predicted_next_price"]) > 0
+    assert ai["trend_direction"] in ["UP", "DOWN", "STABLE"]
+    assert ai["recommendation"] in ["BUY_NOW", "WAIT", "NEUTRAL"]
+    assert len(ai["recommendation_reason"]) > 5
+    assert "algorithm" in ai
+    assert "Ensemble EMA" in ai["algorithm"]
+
+    # Verify Croma, Reliance, Vijay Sales etc. are active stores in comparison
+    store_codes = [s["store_code"] for s in data["stores"]]
+    assert "croma" in store_codes or "croma" in data.get("direct_retailer_links", {})
+
 
 
 

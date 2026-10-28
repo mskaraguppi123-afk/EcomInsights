@@ -56,11 +56,33 @@ class TrustedRetailer:
                 return True
         return False
 
+    def matches_source_name(self, source_name: str) -> bool:
+        """Check if displayed source name matches this retailer."""
+        s = (source_name or "").strip().lower()
+        if not s:
+            return False
+        if self.store_code == "amazon":
+            return bool(re.search(r"^(?:amazon(?:\.in)?|amazon\s+india)$", s))
+        elif self.store_code == "flipkart":
+            return bool(re.search(r"^(?:flipkart(?:\.com)?)$", s))
+        elif self.store_code == "croma":
+            return bool(re.search(r"^(?:croma(?:\.com)?|croma\s+electronics)$", s))
+        elif self.store_code == "reliance":
+            return bool(re.search(r"^(?:reliance(?:\s+digital)?|reliancedigital(?:\.in)?)$", s))
+        elif self.store_code == "vijaysales":
+            return bool(re.search(r"^(?:vijay\s*sales(?:\.com)?)$", s))
+        elif self.store_code == "tatacliq":
+            return bool(re.search(r"^(?:tata\s*cliq(?:\.com)?)$", s))
+        elif self.store_code == "jiomart":
+            return bool(re.search(r"^(?:jiomart(?:\.com)?)$", s))
+        elif self.store_code == "poorvika":
+            return bool(re.search(r"^(?:poorvika(?:\s+mobiles)?(?:\.com)?)$", s))
+        return False
+
 
 # Canonical predefined registry of verified Indian retailers.
-# For India, ONLY Amazon India and Flipkart are enabled by default.
-# Additional retailers (Croma, Reliance Digital, Vijay Sales, Tata CLiQ, JioMart, Poorvika)
-# are pre-configured with verified domains but disabled until explicitly added to the allowlist.
+# Enabled by default for all premier Indian electronics retailers:
+# Amazon India, Flipkart, Croma Electronics, Reliance Digital, Vijay Sales, Tata CLiQ, JioMart, Poorvika.
 PREDEFINED_RETAILERS: Dict[str, TrustedRetailer] = {
     "amazon": TrustedRetailer(
         store_code="amazon",
@@ -86,7 +108,7 @@ PREDEFINED_RETAILERS: Dict[str, TrustedRetailer] = {
         emoji="🏬",
         allowed_domains=["croma.com"],
         priority=3,
-        enabled=False,  # Disabled by default; must be explicitly enabled
+        enabled=True,
         description="Tata Croma electronics retail chain (croma.com)",
     ),
     "reliance": TrustedRetailer(
@@ -95,7 +117,7 @@ PREDEFINED_RETAILERS: Dict[str, TrustedRetailer] = {
         emoji="📱",
         allowed_domains=["reliancedigital.in"],
         priority=3,
-        enabled=False,  # Disabled by default
+        enabled=True,
         description="Reliance Digital nationwide electronics store (reliancedigital.in)",
     ),
     "vijaysales": TrustedRetailer(
@@ -104,7 +126,7 @@ PREDEFINED_RETAILERS: Dict[str, TrustedRetailer] = {
         emoji="📺",
         allowed_domains=["vijaysales.com"],
         priority=3,
-        enabled=False,  # Disabled by default
+        enabled=True,
         description="Vijay Sales consumer electronics (vijaysales.com)",
     ),
     "tatacliq": TrustedRetailer(
@@ -113,7 +135,7 @@ PREDEFINED_RETAILERS: Dict[str, TrustedRetailer] = {
         emoji="🏷️",
         allowed_domains=["tatacliq.com"],
         priority=3,
-        enabled=False,  # Disabled by default
+        enabled=True,
         description="Tata CLiQ digital marketplace (tatacliq.com)",
     ),
     "jiomart": TrustedRetailer(
@@ -122,7 +144,7 @@ PREDEFINED_RETAILERS: Dict[str, TrustedRetailer] = {
         emoji="🏪",
         allowed_domains=["jiomart.com"],
         priority=3,
-        enabled=False,  # Disabled by default
+        enabled=True,
         description="Reliance JioMart retail store (jiomart.com)",
     ),
     "poorvika": TrustedRetailer(
@@ -131,9 +153,20 @@ PREDEFINED_RETAILERS: Dict[str, TrustedRetailer] = {
         emoji="📲",
         allowed_domains=["poorvika.com"],
         priority=3,
-        enabled=False,  # Disabled by default
+        enabled=True,
         description="Poorvika Mobiles electronics chain (poorvika.com)",
     ),
+}
+
+DEFAULT_TRUSTED_CODES: Set[str] = {
+    "amazon",
+    "flipkart",
+    "croma",
+    "reliance",
+    "vijaysales",
+    "tatacliq",
+    "jiomart",
+    "poorvika",
 }
 
 
@@ -230,9 +263,9 @@ def get_active_trusted_retailers(
         except Exception:
             pass
 
-    # Default fallback for India: Amazon India and Flipkart
+    # Default fallback for India: All verified premier retailers (Amazon, Flipkart, Croma, Reliance, Vijay Sales, etc.)
     if not codes_to_enable:
-        codes_to_enable = {"amazon", "flipkart"}
+        codes_to_enable = set(DEFAULT_TRUSTED_CODES)
 
     active: Dict[str, TrustedRetailer] = {}
     for code, retailer in PREDEFINED_RETAILERS.items():
@@ -250,6 +283,12 @@ def get_active_trusted_retailers(
     return {k: v for k, v in active.items() if v.enabled}
 
 
+def is_google_domain(hostname: str) -> bool:
+    """Check if hostname is a Google domain (e.g. google.co.in, google.com)."""
+    h = hostname.lower().strip(".")
+    return h == "google.com" or h.endswith(".google.com") or h == "google.co.in" or h.endswith(".google.co.in")
+
+
 def verify_retailer_from_url(
     url: str,
     source_name: str = "",
@@ -259,26 +298,37 @@ def verify_retailer_from_url(
 
     Returns the matching TrustedRetailer if verified and allowlisted.
     Returns None if:
-    - URL is empty or unparseable.
     - URL domain is a lookalike (e.g. amaz0n.in, flipkart-deals.in).
     - URL domain belongs to an unknown shop, marketplace, or accessory seller.
     - URL domain belongs to a retailer that is NOT in the active allowlist.
     """
-    if not url:
-        return None
-
     if active_retailers is None:
         active_retailers = get_active_trusted_retailers()
 
-    hostname = extract_hostname(url)
-    if not hostname:
+    dest_url = extract_destination_url(url) if url else ""
+    hostname = extract_hostname(dest_url) if dest_url else ""
+
+    # Case 1: The URL has a specific external destination host
+    if hostname and not is_google_domain(hostname):
+        # Must match an allowed domain of an active trusted retailer
+        for code, retailer in active_retailers.items():
+            if not retailer.enabled:
+                continue
+            for allowed_domain in retailer.allowed_domains:
+                if is_allowed_domain_match(hostname, allowed_domain):
+                    return retailer
+        # Hostname is external but does not match any allowlisted domain
+        # (e.g. amaz0n.in, nakedcase.in, babatools.com).
+        # Reject even if source_name claims otherwise!
         return None
 
-    for code, retailer in active_retailers.items():
-        if not retailer.enabled:
-            continue
-        for allowed_domain in retailer.allowed_domains:
-            if is_allowed_domain_match(hostname, allowed_domain):
+    # Case 2: The URL is a Google Shopping/Search internal page or empty/None
+    # Google Shopping aggregates verified merchant listings with source_name badge.
+    if source_name:
+        for code, retailer in active_retailers.items():
+            if not retailer.enabled:
+                continue
+            if retailer.matches_source_name(source_name):
                 return retailer
 
     return None
@@ -308,6 +358,6 @@ def disable_trusted_retailer(store_code: str) -> bool:
 
 
 def reset_trusted_retailers() -> None:
-    """Reset the registry to the initial India default (Amazon India and Flipkart only)."""
+    """Reset the registry to the initial India default (all verified premier retailers enabled)."""
     for code, retailer in PREDEFINED_RETAILERS.items():
-        retailer.enabled = code in ("amazon", "flipkart")
+        retailer.enabled = code in DEFAULT_TRUSTED_CODES

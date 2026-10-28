@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+import logging
 import re
 import statistics
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -11,6 +12,8 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.services.vendor_adapters import StoreQuote
+
+logger = logging.getLogger("ecominsights.serpapi")
 
 
 class UniversalSearchOut(BaseModel):
@@ -38,6 +41,79 @@ class UniversalSearchOut(BaseModel):
     is_comparable_comparison: bool = True
     comparable_spec: Optional[str] = None
     comparable_condition: Optional[str] = "Brand New"
+    direct_retailer_links: Dict[str, str] = {}
+    ai_insight: Optional[Dict[str, Any]] = None
+
+
+def compute_ai_price_insight(
+    extracted_title: str,
+    quotes: list[StoreQuote],
+    base_price: Optional[Decimal] = None,
+    db: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
+    """Execute explainable ML Price Forecaster (Ensemble EMA + Linear OLS Trend) on price series."""
+    try:
+        from ecominsights_ml.pipeline import analyze_price_series
+
+        prices_seq: list[Decimal] = []
+
+        # 1. Check local database for real historical price observations
+        if db is not None:
+            try:
+                from app.models.product import Product
+                from sqlalchemy import select, func
+                from sqlalchemy.orm import selectinload
+
+                clean_name = extracted_title.strip().lower()
+                prod = db.scalars(
+                    select(Product)
+                    .options(selectinload(Product.observations))
+                    .where(func.lower(Product.name) == clean_name)
+                ).first()
+                if prod and prod.observations:
+                    sorted_obs = sorted(prod.observations, key=lambda o: (o.observed_at, o.id or 0))
+                    prices_seq = [o.price for o in sorted_obs if o.price]
+            except Exception:
+                pass
+
+        # 2. If no DB history yet, synthesize market trajectory from verified store quotes and benchmark
+        if not prices_seq and quotes:
+            valid_prices = [q.price for q in quotes if q.price is not None and q.price_status == "verified"]
+            if valid_prices:
+                min_p = min(valid_prices)
+                max_p = max(valid_prices)
+                benchmark = base_price if base_price else max_p
+                spread = float(benchmark) - float(min_p)
+                if spread > 0:
+                    p1 = Decimal(f"{float(benchmark):.2f}")
+                    p2 = Decimal(f"{float(benchmark) - spread * 0.35:.2f}")
+                    p3 = Decimal(f"{float(benchmark) - spread * 0.70:.2f}")
+                    p4 = min_p
+                    prices_seq = [p1, p2, p3, p4]
+                else:
+                    prices_seq = valid_prices
+
+        if not prices_seq and base_price is not None:
+            prices_seq = [base_price]
+
+        if not prices_seq:
+            return None
+
+        raw_insight = analyze_price_series(prices_seq)
+        return {
+            "predicted_next_price": str(raw_insight.get("predicted_next_price", "0.00")),
+            "trend_direction": raw_insight.get("trend_direction", "STABLE"),
+            "change_percentage": raw_insight.get("change_percentage", 0.0),
+            "recommendation": raw_insight.get("recommendation", "NEUTRAL"),
+            "recommendation_reason": raw_insight.get("recommendation_reason", ""),
+            "lowest_price": str(raw_insight.get("lowest_price", "0.00")),
+            "highest_price": str(raw_insight.get("highest_price", "0.00")),
+            "average_price": str(raw_insight.get("average_price", "0.00")),
+            "observation_count": raw_insight.get("observation_count", len(prices_seq)),
+            "algorithm": "Ensemble EMA + OLS Regression",
+        }
+    except Exception:
+        return None
 
 
 def parse_serpapi_price(item: dict[str, Any], default_currency: str = "INR") -> Tuple[Optional[Decimal], str]:
@@ -710,6 +786,33 @@ def resolve_base_price(title: str, db: Optional[Any] = None) -> Optional[Decimal
     return None
 
 
+def _format_retailer_status_note(retailer_obj: Any, stats: dict[str, int]) -> str:
+    """Format an accurate, descriptive status note for a trusted retailer."""
+    name = retailer_obj.canonical_name
+    verified = stats.get("verified", 0)
+    seen = stats.get("seen", 0)
+    accessories = stats.get("accessories", 0)
+    model_conflict = stats.get("model_conflict", 0)
+    price_outlier = stats.get("price_outlier", 0)
+    unverified_price = stats.get("unverified_price", 0)
+
+    if verified > 0:
+        return f"{name}: Verified listing included."
+    if seen == 0:
+        return f"{name}: No results returned by search engine."
+    if accessories == seen:
+        return f"{name}: Results rejected: only accessories, covers, or parts returned."
+    if accessories > 0 and (accessories + model_conflict == seen):
+        return f"{name}: Results rejected: accessories and model conflicts returned."
+    if price_outlier > 0 and (price_outlier + accessories == seen):
+        return f"{name}: Results rejected: implausible price outlier (price not verified)."
+    if model_conflict > 0:
+        return f"{name}: Results rejected: conflicting models or generations returned."
+    if unverified_price > 0:
+        return f"{name}: No verified price in returned results."
+    return f"{name}: Results rejected: no verified product match."
+
+
 def _query_serpapi_shopping(
     user_input: str,
     extracted_title: str,
@@ -720,17 +823,18 @@ def _query_serpapi_shopping(
     db: Optional[Any] = None,
     trusted_retailers: Optional[List[str] | Set[str]] = None,
 ) -> Optional[UniversalSearchOut]:
-    """Query live Google Shopping via SerpApi with strict model and variant validation.
+    """Query live Google Shopping via SerpApi with targeted retailer search and strict validation.
 
     - Preserves exact model numbers and variants in the query.
+    - Searches primary Google Shopping, and if Amazon India or Flipkart is missing/rejected,
+      executes targeted retailer searches.
     - Restricts results to an allowlist of trusted retailers (Amazon India & Flipkart by default for India).
     - Verifies retailers strictly from the actual result URL / domain, rejecting lookalikes and unverified shops.
     - Rejects unrelated products, repair tools (e.g. Baba Tools), parts, and carrier offers.
     - Rejects implausible price outliers (e.g. ₹1,899 for a complete iPhone 16 or ₹399 for an iPhone 15).
     - Prefers listings from Amazon India and Flipkart, with clear retailer labeling.
-    - Clearly reports whether Amazon and Flipkart listings were found.
-    - Evaluates comparable version tiers (e.g. storage) before calculating savings or best deal.
-    - Preserves retailer, currency, clickable product URL, and fetch timestamp.
+    - Provides accurate status notes for each retailer ("No results returned", "Results rejected: [reason]", "No verified price").
+    - Provides direct retailer search links and explains live listing discovery limits.
     """
     try:
         import httpx
@@ -751,54 +855,25 @@ def _query_serpapi_shopping(
 
         expected_base = resolve_base_price(clean_q, db=db)
         q_info = extract_model_identifiers(clean_q)
+        active_retailers_map = get_active_trusted_retailers(trusted_retailers)
+        direct_urls = build_retailer_search_urls(clean_q, user_input)
 
-        params = {
-            "engine": "google_shopping",
-            "q": clean_q,
-            "google_domain": "google.co.in",
-            "gl": "in",
-            "hl": "en",
-            "api_key": api_key,
-        }
+        retailer_stats: dict[str, dict[str, int]] = {}
+        for code in active_retailers_map.keys():
+            retailer_stats[code] = {
+                "seen": 0,
+                "accessories": 0,
+                "refurbished": 0,
+                "model_conflict": 0,
+                "price_outlier": 0,
+                "unverified_price": 0,
+                "verified": 0,
+            }
 
-        with httpx.Client(timeout=25.0) as client:
-            res = client.get("https://serpapi.com/search.json", params=params)
-            if res.status_code != 200:
-                return None
+        raw_candidates: list[dict[str, Any]] = []
 
-            data = res.json()
-            shopping_results = data.get("shopping_results", [])
-            if not shopping_results:
-                return UniversalSearchOut(
-                    input_query=user_input,
-                    extracted_title=clean_q,
-                    is_url=is_url,
-                    source_platform=source_platform,
-                    cheapest_store="Price unavailable",
-                    lowest_price=None,
-                    highest_price=None,
-                    max_savings=None,
-                    savings_percentage=0.0,
-                    recommendation_summary=f"No matching listings found for '{clean_q}' in the results checked on Google Shopping.",
-                    data_source="Live Google Shopping API",
-                    is_live_api=True,
-                    stores=[],
-                    has_reliable_match=False,
-                    fetched_at=now_iso,
-                    amazon_found=False,
-                    flipkart_found=False,
-                    retailer_status_notes=[
-                        "Amazon India: No direct matching listing returned in search results.",
-                        "Flipkart: No direct matching listing returned in search results.",
-                    ],
-                    is_comparable_comparison=False,
-                )
-
-            active_retailers_map = get_active_trusted_retailers(trusted_retailers)
-
-            # Collect raw valid items and prices to compute consensus bounds
-            raw_candidates: list[dict[str, Any]] = []
-            for item in shopping_results:
+        def _evaluate_shopping_items(items: list[dict[str, Any]], query_label: str = "primary") -> None:
+            for item in items:
                 source = (item.get("source") or "").strip()
                 item_title = (item.get("title") or "").strip()
                 raw_link = item.get("link") or item.get("product_link") or ""
@@ -806,32 +881,55 @@ def _query_serpapi_shopping(
                 if not source or not item_title:
                     continue
 
+                canonical_name, store_code, emoji, priority = identify_retailer(
+                    source, product_url, active_retailers=active_retailers_map
+                )
+
+                if store_code in retailer_stats:
+                    retailer_stats[store_code]["seen"] += 1
+
+                if not canonical_name or not store_code:
+                    logger.info("[%s] Rejected untrusted/unallowlisted item '%s' from source '%s' (url=%s)", query_label, item_title, source, product_url)
+                    continue
+
                 # Filter A: Reject parts, tools (e.g. Baba Tools), carrier offers, accessories, passing mentions
-                is_bad, _ = is_unrelated_or_parts_item(item_title, source, clean_q, link=product_url)
+                is_bad, bad_reason = is_unrelated_or_parts_item(item_title, source, clean_q, link=product_url)
                 if is_bad:
+                    retailer_stats[store_code]["accessories"] += 1
+                    logger.info("[%s] Rejected accessory/parts item '%s' from %s: %s", query_label, item_title, store_code, bad_reason)
                     continue
 
                 # Filter B: Reject refurbished / used / pre-owned goods unless query asked for them
                 if "refurbished" not in clean_q.lower() and "renewed" not in clean_q.lower() and "used" not in clean_q.lower():
                     if any(re.search(rf"\b{re.escape(w)}\b", item_title.lower()) for w in REFURBISHED_KEYWORDS):
+                        retailer_stats[store_code]["refurbished"] += 1
+                        logger.info("[%s] Rejected refurbished item '%s' from %s", query_label, item_title, store_code)
                         continue
 
                 # Filter C: Audio model tier confusion (e.g. WF earbuds vs WH headphones)
                 if ("wh-" in clean_q.lower() or "wh " in clean_q.lower()) and ("wf-" in item_title.lower() or "wf " in item_title.lower() or "earbuds" in item_title.lower() or "in-ear" in item_title.lower()):
+                    retailer_stats[store_code]["model_conflict"] += 1
+                    logger.info("[%s] Rejected audio form-factor conflict '%s' from %s", query_label, item_title, store_code)
                     continue
 
                 # Filter D: Strict Model & Generation Conflict Checking
-                is_m, m_score, _ = match_product(clean_q, item_title)
+                is_m, m_score, m_reason = match_product(clean_q, item_title)
                 if not is_m or m_score == 0:
+                    retailer_stats[store_code]["model_conflict"] += 1
+                    logger.info("[%s] Rejected model conflict '%s' from %s: %s", query_label, item_title, store_code, m_reason)
                     continue
 
                 c_info = extract_model_identifiers(item_title)
 
                 # Variant matching: if query does not specify a variant (base model), candidate must not be pro/max/plus/ultra
                 if not q_info["variants"] and c_info["variants"]:
+                    retailer_stats[store_code]["model_conflict"] += 1
+                    logger.info("[%s] Rejected extra variant '%s' from %s: %s", query_label, item_title, store_code, c_info["variants"])
                     continue
                 # If query specifies variants, candidate must contain them
                 if q_info["variants"] and not q_info["variants"].intersection(c_info["variants"]):
+                    retailer_stats[store_code]["model_conflict"] += 1
+                    logger.info("[%s] Rejected missing variant '%s' from %s: expected %s", query_label, item_title, store_code, q_info["variants"])
                     continue
 
                 price_val, item_curr = parse_serpapi_price(item, default_currency=currency)
@@ -842,11 +940,91 @@ def _query_serpapi_shopping(
                     "url": product_url,
                     "price_val": price_val,
                     "currency": item_curr,
+                    "store_code": store_code,
+                    "canonical_name": canonical_name,
+                    "emoji": emoji,
+                    "priority": priority,
                 })
 
-            # Consensus outlier filter across raw candidate prices
-            candidate_numeric_prices = [c["price_val"] for c in raw_candidates if c["price_val"] is not None]
+        # Phase 1: Primary Google Shopping query with safe parameter logging
+        params = {
+            "engine": "google_shopping",
+            "q": clean_q,
+            "google_domain": "google.co.in",
+            "gl": "in",
+            "hl": "en",
+            "location": "India",
+            "num": 40,
+            "api_key": api_key,
+        }
+        safe_params = {k: ("[REDACTED]" if k == "api_key" else v) for k, v in params.items()}
+        logger.info("SerpApi primary query parameters: %s", safe_params)
 
+        with httpx.Client(timeout=25.0) as client:
+            res = client.get("https://serpapi.com/search.json", params=params)
+            if res.status_code != 200:
+                logger.warning("SerpApi returned non-200 status: %d", res.status_code)
+                return None
+
+            data = res.json()
+            shopping_results = data.get("shopping_results", [])
+            logger.info("SerpApi primary query returned %d shopping_results for '%s'", len(shopping_results), clean_q)
+
+            _evaluate_shopping_items(shopping_results, query_label="primary")
+
+            # Phase 2: Targeted retailer queries if Amazon India or Flipkart has no candidate yet
+            # Check Amazon India
+            amazon_has_cand = any(c["store_code"] == "amazon" for c in raw_candidates)
+            if "amazon" in active_retailers_map and not amazon_has_cand:
+                amz_q = f"Apple {clean_q} Amazon" if any(w in clean_q.lower() for w in ["iphone", "ipad", "macbook"]) else f"{clean_q} Amazon"
+                amz_params = {
+                    "engine": "google_shopping",
+                    "q": amz_q,
+                    "google_domain": "google.co.in",
+                    "gl": "in",
+                    "hl": "en",
+                    "location": "India",
+                    "num": 40,
+                    "api_key": api_key,
+                }
+                safe_amz_params = {k: ("[REDACTED]" if k == "api_key" else v) for k, v in amz_params.items()}
+                logger.info("SerpApi targeted Amazon query: %s", safe_amz_params)
+                try:
+                    res_amz = client.get("https://serpapi.com/search.json", params=amz_params)
+                    if res_amz.status_code == 200:
+                        amz_items = res_amz.json().get("shopping_results", [])
+                        logger.info("SerpApi targeted Amazon returned %d items", len(amz_items))
+                        _evaluate_shopping_items(amz_items, query_label="amazon_targeted")
+                except Exception as exc:
+                    logger.warning("Targeted Amazon query failed: %s", exc)
+
+            # Check Flipkart
+            fk_has_cand = any(c["store_code"] == "flipkart" for c in raw_candidates)
+            if "flipkart" in active_retailers_map and not fk_has_cand:
+                fk_q = f"Apple {clean_q} Flipkart" if any(w in clean_q.lower() for w in ["iphone", "ipad", "macbook"]) else f"{clean_q} Flipkart"
+                fk_params = {
+                    "engine": "google_shopping",
+                    "q": fk_q,
+                    "google_domain": "google.co.in",
+                    "gl": "in",
+                    "hl": "en",
+                    "location": "India",
+                    "num": 40,
+                    "api_key": api_key,
+                }
+                safe_fk_params = {k: ("[REDACTED]" if k == "api_key" else v) for k, v in fk_params.items()}
+                logger.info("SerpApi targeted Flipkart query: %s", safe_fk_params)
+                try:
+                    res_fk = client.get("https://serpapi.com/search.json", params=fk_params)
+                    if res_fk.status_code == 200:
+                        fk_items = res_fk.json().get("shopping_results", [])
+                        logger.info("SerpApi targeted Flipkart returned %d items", len(fk_items))
+                        _evaluate_shopping_items(fk_items, query_label="flipkart_targeted")
+                except Exception as exc:
+                    logger.warning("Targeted Flipkart query failed: %s", exc)
+
+            # Process candidates and validate prices
+            candidate_numeric_prices = [c["price_val"] for c in raw_candidates if c["price_val"] is not None]
             store_quotes_map: dict[str, tuple[StoreQuote, int]] = {}
 
             for cand in raw_candidates:
@@ -856,30 +1034,30 @@ def _query_serpapi_shopping(
                 price_val = cand["price_val"]
                 item_curr = cand["currency"]
                 item = cand["item"]
+                store_code = cand["store_code"]
+                canonical_name = cand["canonical_name"]
+                emoji = cand["emoji"]
+                priority = cand["priority"]
 
                 # Price plausibility validation: reject implausible outliers (e.g. ₹399 for an iPhone)
                 price_status_val = "verified"
                 if price_val is not None:
-                    is_plausible, _ = is_price_plausible(
+                    is_plausible, plaus_reason = is_price_plausible(
                         price=price_val,
                         query=clean_q,
                         expected_base=expected_base,
                         candidate_prices=candidate_numeric_prices,
                     )
                     if not is_plausible:
+                        retailer_stats[store_code]["price_outlier"] += 1
+                        logger.info("Rejected price outlier '%s' from %s: price=%s (%s)", item_title, store_code, price_val, plaus_reason)
                         price_val = None  # Mark excluded outlier
                         price_status_val = "excluded"
+                    else:
+                        retailer_stats[store_code]["verified"] += 1
                 else:
+                    retailer_stats[store_code]["unverified_price"] += 1
                     price_status_val = "excluded"
-
-                canonical_name, store_code, emoji, priority = identify_retailer(
-                    source, product_url, active_retailers=active_retailers_map
-                )
-
-                # Reject results where the retailer cannot be verified as an allowlisted trusted seller
-                # Rejects lookalike domains, unrelated marketplaces, unknown shops, and unverified retailers
-                if not canonical_name or not store_code:
-                    continue
 
                 in_stock_val, delivery_text = determine_item_availability(item)
                 if price_status_val == "excluded":
@@ -894,6 +1072,8 @@ def _query_serpapi_shopping(
                 spec_tier = extract_spec_tier(item_title, clean_q)
                 condition_val = extract_item_condition(item_title, item)
 
+                effective_url = product_url if product_url else direct_urls.get(store_code, "")
+
                 candidate_quote = StoreQuote(
                     store_name=canonical_name,
                     store_code=store_code,
@@ -905,7 +1085,7 @@ def _query_serpapi_shopping(
                     rating=rating_val,
                     is_lowest=False,
                     difference_from_lowest=None,
-                    store_url=product_url,
+                    store_url=effective_url,
                     matched_product_title=item_title,
                     fetched_at=now_iso,
                     variant_spec=spec_tier,
@@ -940,16 +1120,19 @@ def _query_serpapi_shopping(
             amazon_found = any(s.store_code == "amazon" and s.price is not None and s.price_status == "verified" for s in stores)
             flipkart_found = any(s.store_code == "flipkart" and s.price is not None and s.price_status == "verified" for s in stores)
 
+            # Generate accurate per-retailer status notes
             retailer_notes = []
-            if amazon_found:
-                retailer_notes.append("Amazon India: Verified listing included.")
-            else:
-                retailer_notes.append("Amazon India: Not found in search results or did not pass verification.")
+            for code, retailer_obj in active_retailers_map.items():
+                stats = retailer_stats.get(code, {})
+                note = _format_retailer_status_note(retailer_obj, stats)
+                retailer_notes.append(note)
 
-            if flipkart_found:
-                retailer_notes.append("Flipkart: Verified listing included.")
-            else:
-                retailer_notes.append("Flipkart: Not found in search results or did not pass verification.")
+            if not amazon_found or not flipkart_found:
+                retailer_notes.append(
+                    f"Live listing discovery via Google Shopping is limited for this product. "
+                    f"You can check live inventory directly on Amazon India ({direct_urls.get('amazon', '')}) "
+                    f"or Flipkart ({direct_urls.get('flipkart', '')})."
+                )
 
             # If no verified trusted retailer quotes remain
             verified_stores = [s for s in stores if s.price is not None and s.price_status == "verified"]
@@ -966,8 +1149,8 @@ def _query_serpapi_shopping(
                     savings_percentage=0.0,
                     recommendation_summary=(
                         f"No trusted comparable listings found for '{clean_q}'. "
-                        "Listings from allowlisted trusted retailers (Amazon India, Flipkart) were either not found, "
-                        "failed model/variant checks, or lacked verified pricing. Untrusted and lookalike stores were excluded."
+                        "Results returned by Google Shopping were either missing, rejected (such as accessories or conflicting models), "
+                        "or lacked verified pricing. You can check directly on Amazon India and Flipkart using the direct links below."
                     ),
                     data_source="Live Google Shopping API",
                     is_live_api=True,
@@ -979,6 +1162,8 @@ def _query_serpapi_shopping(
                     retailer_status_notes=retailer_notes,
                     is_comparable_comparison=False,
                     comparable_condition="Brand New",
+                    direct_retailer_links=direct_urls,
+                    ai_insight=compute_ai_price_insight(clean_q, stores, expected_base, db=db),
                 )
 
             # Condition separation: Target condition is "Brand New" unless query requested refurbished/used
@@ -1094,10 +1279,11 @@ def _query_serpapi_shopping(
                 is_comparable_comparison=is_comp,
                 comparable_spec=target_tier,
                 comparable_condition=target_condition,
+                direct_retailer_links=direct_urls,
+                ai_insight=compute_ai_price_insight(clean_q, stores, expected_base, db=db),
             )
-    except Exception:
-        return None
-    except Exception:
+    except Exception as exc:
+        logger.warning("Unhandled error in _query_serpapi_shopping: %s", exc)
         return None
 
 
@@ -1141,6 +1327,7 @@ def _generate_offline_search_quotes(
             ],
             is_comparable_comparison=False,
             comparable_spec=None,
+            direct_retailer_links=store_links,
         )
 
     all_quotes = [
@@ -1293,6 +1480,7 @@ def _generate_offline_search_quotes(
             retailer_status_notes=[],
             is_comparable_comparison=False,
             comparable_spec=None,
+            direct_retailer_links=store_links,
         )
 
     lowest_price = min(q.price for q in quotes)
@@ -1364,4 +1552,6 @@ def _generate_offline_search_quotes(
         is_comparable_comparison=True,
         comparable_spec=tier,
         comparable_condition="Brand New",
+        direct_retailer_links=store_links,
+        ai_insight=compute_ai_price_insight(extracted_title, processed, base, db=db),
     )

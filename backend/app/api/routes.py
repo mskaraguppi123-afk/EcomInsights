@@ -11,7 +11,17 @@ from app.db.seed import seed_sample_data
 from app.db.session import get_db
 from app.models.price_observation import PriceObservation
 from app.models.product import Product
-from ecominsights_ml.pipeline import analyze_price_series
+
+try:
+    from ecominsights_ml.pipeline import analyze_price_series
+except ModuleNotFoundError:
+    import sys
+    import os
+    _ml_p = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "ml", "src"))
+    if os.path.isdir(_ml_p) and _ml_p not in sys.path:
+        sys.path.insert(0, _ml_p)
+    from ecominsights_ml.pipeline import analyze_price_series
+
 from app.services.vendor_adapters import MultiStoreComparisonOut, arbitrage_engine
 from app.services.link_search import UniversalSearchOut, search_and_compare_product
 from app.schemas.health import HealthResponse

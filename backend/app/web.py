@@ -1164,13 +1164,23 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
         let storeGridHtml = '';
         if (!hasReliable) {
+          const amzDirectLink = (data.direct_retailer_links && data.direct_retailer_links.amazon) || `https://www.amazon.in/s?k=${encodeURIComponent(data.extracted_title)}`;
+          const fkDirectLink = (data.direct_retailer_links && data.direct_retailer_links.flipkart) || `https://www.flipkart.com/search?q=${encodeURIComponent(data.extracted_title)}`;
           storeGridHtml = `
             <div style="text-align:center; padding:24px 16px; background:#fff; border:1px dashed #d5ddd8; border-radius:10px;">
               <div style="font-size:28px; margin-bottom:8px;">🔎</div>
               <div style="font-size:15px; font-weight:800; color:#18231f;">${data.cheapest_store.includes('trusted') || data.cheapest_store.includes('comparable') || data.cheapest_store.includes('found') ? 'No Trusted Comparable Listings Found' : 'Price Unavailable / No Reliable Match'}</div>
-              <p style="font-size:13px; color:#6e7d75; margin:6px 0 0;">
+              <p style="font-size:13px; color:#6e7d75; margin:6px 0 14px;">
                 ${data.recommendation_summary || 'No verified price data found in trusted data sources.'}
               </p>
+              <div style="display:inline-flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+                <a href="${amzDirectLink}" target="_blank" rel="noopener noreferrer" style="display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:700; color:#ffffff; background:#1f7359; text-decoration:none; padding:7px 14px; border-radius:6px;">
+                  🛒 Check Live on Amazon.in ↗
+                </a>
+                <a href="${fkDirectLink}" target="_blank" rel="noopener noreferrer" style="display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:700; color:#ffffff; background:#1f7359; text-decoration:none; padding:7px 14px; border-radius:6px;">
+                  🛍️ Check Live on Flipkart ↗
+                </a>
+              </div>
             </div>
           `;
         } else {
@@ -1209,13 +1219,19 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           `;
         }
 
+        const amzNote = (data.retailer_status_notes || []).find(n => n.toLowerCase().includes('amazon'));
+        const amzReason = amzNote && amzNote.includes(':') ? amzNote.split(':')[1].trim() : 'Not found in search results';
+
+        const fkNote = (data.retailer_status_notes || []).find(n => n.toLowerCase().includes('flipkart'));
+        const fkReason = fkNote && fkNote.includes(':') ? fkNote.split(':')[1].trim() : 'Not found in search results';
+
         const retailerStatusHtml = `
           <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
             <span style="font-size:11px; font-weight:700; padding:4px 10px; border-radius:6px; background:${data.amazon_found ? '#e8f5e9' : '#fff3e0'}; color:${data.amazon_found ? '#1b5e20' : '#b78103'}; border:1px solid ${data.amazon_found ? '#c8e6c9' : '#ffe0b2'}; display:inline-flex; align-items:center; gap:4px;">
-              🛒 Amazon India: ${data.amazon_found ? '✓ Verified Listing' : '✕ Not found in search results'}
+              🛒 Amazon India: ${data.amazon_found ? '✓ Verified Listing' : `✕ ${amzReason}`}
             </span>
             <span style="font-size:11px; font-weight:700; padding:4px 10px; border-radius:6px; background:${data.flipkart_found ? '#e8f5e9' : '#fff3e0'}; color:${data.flipkart_found ? '#1b5e20' : '#b78103'}; border:1px solid ${data.flipkart_found ? '#c8e6c9' : '#ffe0b2'}; display:inline-flex; align-items:center; gap:4px;">
-              🛍️ Flipkart: ${data.flipkart_found ? '✓ Verified Listing' : '✕ Not found in search results'}
+              🛍️ Flipkart: ${data.flipkart_found ? '✓ Verified Listing' : `✕ ${fkReason}`}
             </span>
             ${data.comparable_spec ? `
               <span style="font-size:11px; font-weight:700; padding:4px 10px; border-radius:6px; background:#e3f2fd; color:#0d47a1; border:1px solid #bbdefb; display:inline-flex; align-items:center; gap:4px;">
@@ -1229,6 +1245,78 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             ` : ''}
           </div>
         `;
+
+        let discoveryLinksHtml = '';
+        if ((!data.amazon_found || !data.flipkart_found) && data.direct_retailer_links) {
+          const amzLnk = data.direct_retailer_links.amazon || `https://www.amazon.in/s?k=${encodeURIComponent(data.extracted_title)}`;
+          const fkLnk = data.direct_retailer_links.flipkart || `https://www.flipkart.com/search?q=${encodeURIComponent(data.extracted_title)}`;
+          discoveryLinksHtml = `
+            <div style="margin-bottom:14px; padding:10px 14px; background:#f9fbf9; border:1px solid #d5e5db; border-radius:8px; font-size:12px; color:#34453c;">
+              <div style="font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
+                <span>ℹ️</span> Store Discovery & Direct Retailer Links:
+              </div>
+              <div style="font-size:11px; color:#66776e; margin-bottom:8px;">
+                Google Shopping indexed results may omit direct phone listings. Check live retailer catalogs directly:
+              </div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <a href="${amzLnk}" target="_blank" rel="noopener noreferrer" style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:700; color:#1f7359; text-decoration:none; background:#ffffff; border:1px solid #1f7359; padding:5px 12px; border-radius:6px;">
+                  🛒 Search on Amazon.in ↗
+                </a>
+                <a href="${fkLnk}" target="_blank" rel="noopener noreferrer" style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:700; color:#1f7359; text-decoration:none; background:#ffffff; border:1px solid #1f7359; padding:5px 12px; border-radius:6px;">
+                  🛍️ Search on Flipkart ↗
+                </a>
+              </div>
+            </div>
+          `;
+        }
+
+        let aiInsightHtml = '';
+        if (data.ai_insight) {
+          const ai = data.ai_insight;
+          const isDrop = ai.trend_direction === 'DOWN';
+          const isUp = ai.trend_direction === 'UP';
+          const recBadgeColor = ai.recommendation === 'BUY_NOW' ? '#166534' : (ai.recommendation === 'WAIT' ? '#9a3412' : '#0369a1');
+          const recBgColor = ai.recommendation === 'BUY_NOW' ? '#dcfce7' : (ai.recommendation === 'WAIT' ? '#ffedd5' : '#e0f2fe');
+          const recBorder = ai.recommendation === 'BUY_NOW' ? '#86efac' : (ai.recommendation === 'WAIT' ? '#fed7aa' : '#bae6fd');
+
+          aiInsightHtml = `
+            <div style="margin-bottom:14px; background:linear-gradient(135deg, #f0fdf4 0%, #ffffff 100%); border:1px solid #bbf7d0; border-radius:10px; padding:14px; box-shadow:0 2px 6px rgba(31,115,89,0.04);">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:6px;">
+                <span style="font-size:12px; font-weight:800; color:#166534; display:inline-flex; align-items:center; gap:6px;">
+                  <span>🤖</span> AI Price Intelligence & ML Forecaster
+                </span>
+                <span style="font-size:10px; font-weight:700; color:#15803d; background:#dcfce7; padding:2px 8px; border-radius:12px; border:1px solid #86efac;">
+                  Ensemble EMA + OLS Regression
+                </span>
+              </div>
+              <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
+                <div style="background:#ffffff; padding:10px 12px; border-radius:8px; border:1px solid #e2e8f0;">
+                  <div style="font-size:10px; color:#64748b; font-weight:700; text-transform:uppercase;">Predicted Next Price</div>
+                  <div style="font-size:18px; font-weight:800; color:#0f172a; margin:2px 0;">₹${parseFloat(ai.predicted_next_price).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                  <div style="font-size:10px; color:${isDrop ? '#16a34a' : (isUp ? '#d97706' : '#64748b')}; font-weight:700;">
+                    ${isDrop ? '📉 Projected Drop' : (isUp ? '📈 Projected Rise' : '➡️ Stable Trend')} (${ai.change_percentage > 0 ? '+' : ''}${ai.change_percentage}%)
+                  </div>
+                </div>
+                <div style="background:#ffffff; padding:10px 12px; border-radius:8px; border:1px solid #e2e8f0;">
+                  <div style="font-size:10px; color:#64748b; font-weight:700; text-transform:uppercase;">AI Buying Recommendation</div>
+                  <div style="font-size:12px; font-weight:800; color:${recBadgeColor}; background:${recBgColor}; border:1px solid ${recBorder}; padding:2px 8px; border-radius:4px; display:inline-block; margin:3px 0;">
+                    ${ai.recommendation === 'BUY_NOW' ? '🟢 BUY NOW' : (ai.recommendation === 'WAIT' ? '⏳ WAIT FOR DROP' : '⚖️ NEUTRAL')}
+                  </div>
+                  <div style="font-size:10px; color:#475569; margin-top:3px; line-height:1.3;">${ai.recommendation_reason}</div>
+                </div>
+                <div style="background:#ffffff; padding:10px 12px; border-radius:8px; border:1px solid #e2e8f0;">
+                  <div style="font-size:10px; color:#64748b; font-weight:700; text-transform:uppercase;">Market Arbitrage & Spread</div>
+                  <div style="font-size:18px; font-weight:800; color:#1f7359; margin:2px 0;">
+                    ${data.max_savings ? '₹' + parseFloat(data.max_savings).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : 'Single Store Quote'}
+                  </div>
+                  <div style="font-size:10px; color:#64748b;">
+                    ${data.savings_percentage > 0 ? `${data.savings_percentage}% instant cross-store savings` : 'Compared across verified retailers'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        }
 
         universalResult.innerHTML = `
           <div style="background:#f7fbf9; border:1px solid #cce2d6; border-radius:10px; padding:16px;">
@@ -1253,7 +1341,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
               💡 <strong>${data.recommendation_summary}</strong>
             </div>
 
+            ${aiInsightHtml}
+
             ${retailerStatusHtml}
+
+            ${discoveryLinksHtml}
 
             ${storeGridHtml}
           </div>

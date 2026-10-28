@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./ecominsights.db"
     cors_origins: str = "http://localhost:5173"
     serpapi_api_key: str | None = None
-    trusted_retailers: str = "amazon,flipkart"
+    trusted_retailers: str = "amazon,flipkart,croma,reliance,vijaysales,tatacliq,jiomart,poorvika"
 
     model_config = SettingsConfigDict(env_file=("../.env", ".env"), extra="ignore")
 

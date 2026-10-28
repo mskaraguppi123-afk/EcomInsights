@@ -583,6 +583,79 @@ export default function App() {
               💡 <strong>{universalResult.recommendation_summary}</strong>
             </div>
 
+            {universalResult.ai_insight && (
+              <div
+                style={{
+                  marginBottom: '14px',
+                  background: 'linear-gradient(135deg, #f0fdf4 0%, #ffffff 100%)',
+                  border: '1px solid #bbf7d0',
+                  borderRadius: '10px',
+                  padding: '14px',
+                  boxShadow: '0 2px 6px rgba(31,115,89,0.04)',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '6px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: '800', color: '#166534', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    <span>🤖</span> AI Price Intelligence &amp; ML Forecaster
+                  </span>
+                  <span style={{ fontSize: '10px', fontWeight: '700', color: '#15803d', background: '#dcfce7', padding: '2px 8px', borderRadius: '12px', border: '1px solid #86efac' }}>
+                    Ensemble EMA + OLS Regression
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
+                  <div style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                    <div style={{ fontSize: '10px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase' }}>Predicted Next Price</div>
+                    <div style={{ fontSize: '18px', fontWeight: '800', color: '#0f172a', margin: '2px 0' }}>
+                      ₹{parseFloat(universalResult.ai_insight.predicted_next_price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '10px',
+                        color: universalResult.ai_insight.trend_direction === 'DOWN' ? '#16a34a' : (universalResult.ai_insight.trend_direction === 'UP' ? '#d97706' : '#64748b'),
+                        fontWeight: '700',
+                      }}
+                    >
+                      {universalResult.ai_insight.trend_direction === 'DOWN' ? '📉 Projected Drop' : (universalResult.ai_insight.trend_direction === 'UP' ? '📈 Projected Rise' : '➡️ Stable Trend')} ({universalResult.ai_insight.change_percentage > 0 ? '+' : ''}{universalResult.ai_insight.change_percentage}%)
+                    </div>
+                  </div>
+                  <div style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                    <div style={{ fontSize: '10px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase' }}>AI Buying Recommendation</div>
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        fontWeight: '800',
+                        color: universalResult.ai_insight.recommendation === 'BUY_NOW' ? '#166534' : (universalResult.ai_insight.recommendation === 'WAIT' ? '#9a3412' : '#0369a1'),
+                        background: universalResult.ai_insight.recommendation === 'BUY_NOW' ? '#dcfce7' : (universalResult.ai_insight.recommendation === 'WAIT' ? '#ffedd5' : '#e0f2fe'),
+                        border: `1px solid ${universalResult.ai_insight.recommendation === 'BUY_NOW' ? '#86efac' : (universalResult.ai_insight.recommendation === 'WAIT' ? '#fed7aa' : '#bae6fd')}`,
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        display: 'inline-block',
+                        margin: '3px 0',
+                      }}
+                    >
+                      {universalResult.ai_insight.recommendation === 'BUY_NOW' ? '🟢 BUY NOW' : (universalResult.ai_insight.recommendation === 'WAIT' ? '⏳ WAIT FOR DROP' : '⚖️ NEUTRAL')}
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#475569', marginTop: '3px', lineHeight: '1.3' }}>
+                      {universalResult.ai_insight.recommendation_reason}
+                    </div>
+                  </div>
+                  <div style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                    <div style={{ fontSize: '10px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase' }}>Market Arbitrage &amp; Spread</div>
+                    <div style={{ fontSize: '18px', fontWeight: '800', color: '#1f7359', margin: '2px 0' }}>
+                      {universalResult.max_savings
+                        ? `₹${parseFloat(universalResult.max_savings).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                        : 'Single Store Quote'}
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#64748b' }}>
+                      {universalResult.savings_percentage > 0
+                        ? `${universalResult.savings_percentage}% instant cross-store savings`
+                        : 'Compared across verified retailers'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' }}>
               <span
                 style={{
@@ -666,7 +739,7 @@ export default function App() {
               )}
             </div>
 
-            {(!universalResult.amazon_found || !universalResult.flipkart_found) && universalResult.direct_retailer_links && (
+            {universalResult.direct_retailer_links && Object.keys(universalResult.direct_retailer_links).length > 0 && (
               <div
                 style={{
                   marginBottom: '14px',
@@ -679,7 +752,7 @@ export default function App() {
                 }}
               >
                 <div style={{ fontWeight: '700', marginBottom: '6px' }}>
-                  ℹ️ Store Discovery & Direct Links:
+                  ℹ️ Store Discovery &amp; Direct Retailer Links:
                 </div>
                 <div style={{ fontSize: '11px', color: '#66776e', marginBottom: '8px' }}>
                   Live Google Shopping discovery may omit direct merchant listings. You can check live availability directly:
@@ -704,7 +777,7 @@ export default function App() {
                         borderRadius: '6px',
                       }}
                     >
-                      🛒 Search on Amazon.in ↗
+                      🛒 Amazon.in ↗
                     </a>
                   )}
                   {universalResult.direct_retailer_links.flipkart && (
@@ -726,7 +799,95 @@ export default function App() {
                         borderRadius: '6px',
                       }}
                     >
-                      🛍️ Search on Flipkart ↗
+                      🛍️ Flipkart ↗
+                    </a>
+                  )}
+                  {universalResult.direct_retailer_links.croma && (
+                    <a
+                      href={universalResult.direct_retailer_links.croma}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        color: '#1f7359',
+                        textDecoration: 'none',
+                        background: '#ffffff',
+                        border: '1px solid #1f7359',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                      }}
+                    >
+                      🏬 Croma ↗
+                    </a>
+                  )}
+                  {universalResult.direct_retailer_links.reliance && (
+                    <a
+                      href={universalResult.direct_retailer_links.reliance}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        color: '#1f7359',
+                        textDecoration: 'none',
+                        background: '#ffffff',
+                        border: '1px solid #1f7359',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                      }}
+                    >
+                      📱 Reliance Digital ↗
+                    </a>
+                  )}
+                  {universalResult.direct_retailer_links.vijaysales && (
+                    <a
+                      href={universalResult.direct_retailer_links.vijaysales}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        color: '#1f7359',
+                        textDecoration: 'none',
+                        background: '#ffffff',
+                        border: '1px solid #1f7359',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                      }}
+                    >
+                      📺 Vijay Sales ↗
+                    </a>
+                  )}
+                  {universalResult.direct_retailer_links.tatacliq && (
+                    <a
+                      href={universalResult.direct_retailer_links.tatacliq}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        color: '#1f7359',
+                        textDecoration: 'none',
+                        background: '#ffffff',
+                        border: '1px solid #1f7359',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                      }}
+                    >
+                      🏷️ Tata CLiQ ↗
                     </a>
                   )}
                 </div>
@@ -741,9 +902,53 @@ export default function App() {
                     ? 'No Trusted Comparable Listings Found'
                     : 'Price Unavailable / No Reliable Match'}
                 </div>
-                <p style={{ fontSize: '13px', color: '#6e7d75', margin: '6px 0 0' }}>
+                <p style={{ fontSize: '13px', color: '#6e7d75', margin: '6px 0 14px' }}>
                   {universalResult.recommendation_summary || `No verified price data found for '${universalResult.extracted_title}' in trusted data sources.`}
                 </p>
+                {universalResult.direct_retailer_links && (
+                  <div style={{ display: 'inline-flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                    {universalResult.direct_retailer_links.amazon && (
+                      <a
+                        href={universalResult.direct_retailer_links.amazon}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '700', color: '#ffffff', background: '#1f7359', textDecoration: 'none', padding: '6px 12px', borderRadius: '6px' }}
+                      >
+                        🛒 Check Amazon.in ↗
+                      </a>
+                    )}
+                    {universalResult.direct_retailer_links.flipkart && (
+                      <a
+                        href={universalResult.direct_retailer_links.flipkart}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '700', color: '#ffffff', background: '#1f7359', textDecoration: 'none', padding: '6px 12px', borderRadius: '6px' }}
+                      >
+                        🛍️ Check Flipkart ↗
+                      </a>
+                    )}
+                    {universalResult.direct_retailer_links.croma && (
+                      <a
+                        href={universalResult.direct_retailer_links.croma}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '700', color: '#ffffff', background: '#1f7359', textDecoration: 'none', padding: '6px 12px', borderRadius: '6px' }}
+                      >
+                        🏬 Check Croma ↗
+                      </a>
+                    )}
+                    {universalResult.direct_retailer_links.reliance && (
+                      <a
+                        href={universalResult.direct_retailer_links.reliance}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '700', color: '#ffffff', background: '#1f7359', textDecoration: 'none', padding: '6px 12px', borderRadius: '6px' }}
+                      >
+                        📱 Check Reliance ↗
+                      </a>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '12px' }}>
