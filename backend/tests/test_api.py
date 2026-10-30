@@ -2423,6 +2423,64 @@ def test_disallowed_search_query_guards():
         assert is_disallowed_search_query(term) is False, f"'{term}' should be recognized as a valid search query"
 
 
+def test_shortened_flipkart_url_dl_flipkart_com_4ibkdsuuuN_resolves_and_extracts_product():
+    """Regression test: submitting Flipkart app short link 'https://dl.flipkart.com/s/4ibkdsuuuN'
+    resolves safely, avoids false-positive SSRF rejection on NAT64 carrier addresses,
+    extracts 'Motorola Edge 70 Pro 256 GB', and performs valid cross-store price comparison."""
+    from unittest.mock import patch
+    from app.services.safe_url_resolver import register_mock_resolution, clear_mock_resolutions
+    from app.services.link_search import extract_product_title, search_and_compare_product
+
+    clear_mock_resolutions()
+    short_link = "https://dl.flipkart.com/s/4ibkdsuuuN"
+    dest_url = "https://www.flipkart.com/motorola-edge-70-pro-tailored-fabric-pantone-titan-blue-256-gb/p/itmabaee92c5d0da?pid=MOBHN9734ZPCKBAC"
+
+    register_mock_resolution(
+        short_link,
+        final_url=dest_url,
+        html_content="<title>Motorola Edge 70 Pro (256 GB) Online at Best Price in India | Flipkart.com</title>",
+    )
+
+    try:
+        extracted = extract_product_title(short_link)
+        assert extracted.is_url is True
+        assert extracted.source_platform == "Flipkart"
+        assert extracted.title != "Unresolved Product Link"
+        assert "Motorola Edge 70 Pro" in extracted.title
+        assert "flipkart.com" not in extracted.title.lower()
+        assert "dl" not in extracted.title.lower().split()
+        assert "s" not in extracted.title.lower().split()
+
+        res = search_and_compare_product(short_link)
+        assert res.has_reliable_match is True
+        assert res.lowest_price is not None
+        assert "Motorola Edge 70 Pro" in res.extracted_title
+        assert any("flipkart" in s.store_code.lower() for s in res.stores)
+    finally:
+        clear_mock_resolutions()
+
+
+def test_nat64_and_ipv4_mapped_ipv6_ssrf_safety():
+    """Verify that RFC 6052 NAT64 and IPv4-mapped IPv6 addresses are safely inspected for SSRF:
+    public translated IPs are permitted while private/loopback/cloud metadata destinations are blocked."""
+    from app.services.safe_url_resolver import is_ip_safe_and_public
+
+    # Public carrier NAT64 (Akamai / Flipkart translated edge)
+    assert is_ip_safe_and_public("64:ff9b::a335:4d3e") is True
+
+    # Malicious loopback or private addresses synthesized via NAT64 must be blocked
+    assert is_ip_safe_and_public("64:ff9b::7f00:1") is False     # 127.0.0.1
+    assert is_ip_safe_and_public("64:ff9b::a9fe:a9fe") is False  # 169.254.169.254 (AWS metadata)
+    assert is_ip_safe_and_public("64:ff9b::c0a8:101") is False   # 192.168.1.1
+    assert is_ip_safe_and_public("64:ff9b::0a00:0001") is False  # 10.0.0.1
+
+    # IPv4-mapped IPv6 addresses
+    assert is_ip_safe_and_public("::ffff:127.0.0.1") is False    # Localhost
+    assert is_ip_safe_and_public("::ffff:169.254.169.254") is False
+    assert is_ip_safe_and_public("::ffff:163.53.77.62") is True  # Public Flipkart Akamai IP
+
+
+
 
 
 

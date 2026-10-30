@@ -804,10 +804,14 @@ KNOWN_PRODUCTS = {
     "oneplus 11": Decimal("49999.00"),
     "oneplus nord 4": Decimal("29999.00"),
     # Motorola Phones
+    "motorola edge 70 pro": Decimal("39999.00"),
+    "moto edge 70 pro": Decimal("39999.00"),
+    "motorola edge 50 ultra": Decimal("49999.00"),
+    "motorola edge 50 pro": Decimal("31999.00"),
+    "motorola edge 50 fusion": Decimal("22999.00"),
     "moto g96": Decimal("17999.00"),
     "moto g85": Decimal("16999.00"),
     "moto g54": Decimal("13999.00"),
-    "motorola edge 50 pro": Decimal("31999.00"),
     # Laptops & MacBooks
     "macbook air m3": Decimal("104900.00"),
     "macbook air m2": Decimal("92900.00"),
@@ -876,7 +880,8 @@ def clean_product_search_term(title: str) -> str:
         r"\b(fast charging|super retina|xdr display|bionic chip|apple intelligence)\b",
         r"\b(truly wireless|true wireless|tws|bluetooth|in ear|over ear)\b",
         r"\b(with mic|with microphone|with case|with silicone case|magsafe)\b",
-        r"\b(black|white|blue|green|silver|gold|space grey|space gray|midnight|starlight|titanium|desert titanium|natural titanium|ultramarine|teal|pink|yellow|purple)\b",
+        r"\b(black|white|blue|green|silver|gold|space grey|space gray|midnight|starlight|titanium|desert titanium|natural titanium|ultramarine|teal|pink|yellow|purple|pantone|titan)\b",
+        r"\b(tailored fabric|pantone titan blue|tailored|fabric|vegan leather|leather|polycarbonate)\b",
         r"\b(smartphone|mobile phone|unlocked|cellular|refurbished|renewed)\b",
     ]
     cleaned = t

@@ -146,6 +146,7 @@ KNOWN_RETAILER_PRODUCT_IDS: Dict[str, str] = {
     "itm5a18a5ae74d32": "Apple iPhone 16 (Black, 128 GB)",
     "itmc039d997237b4": "Motorola Moto G85 5G (Cobalt Blue, 128 GB)",
     "itm96d0397237b4a": "Motorola Moto G96 5G (128 GB)",
+    "itmabaee92c5d0da": "Motorola Edge 70 Pro (256 GB)",
 }
 
 
@@ -220,24 +221,20 @@ def clear_mock_resolutions() -> None:
     _MOCK_RESOLUTIONS.clear()
 
 
+NAT64_WELL_KNOWN_PREFIX = ipaddress.IPv6Network("64:ff9b::/96")
+
+
 def is_ip_safe_and_public(ip_str: str) -> bool:
     """Verify that an IP address is strictly a routable public address.
 
     Rejects private, loopback, link-local, multicast, reserved, and unspecified addresses.
+    Safely permits IPv4-mapped (::ffff:0:0/96) and RFC 6052 NAT64 (64:ff9b::/96) synthesized
+    IPv6 addresses when their embedded IPv4 address is confirmed public.
     """
     try:
         ip = ipaddress.ip_address(ip_str)
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
-            return False
 
-        # Check IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 or ::ffff:169.254.169.254)
+        # 1. Check IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 or ::ffff:163.53.77.62)
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
             mapped = ip.ipv4_mapped
             if (
@@ -249,6 +246,34 @@ def is_ip_safe_and_public(ip_str: str) -> bool:
                 or mapped.is_unspecified
             ):
                 return False
+            return True
+
+        # 2. Check RFC 6052 NAT64 Well-Known Prefix (64:ff9b::/96)
+        # DNS64 / NAT64 synthesis used by cellular and ISP carriers maps public IPv4 addresses
+        # into 64:ff9b::/96. Verify the embedded IPv4 address.
+        if isinstance(ip, ipaddress.IPv6Address) and ip in NAT64_WELL_KNOWN_PREFIX:
+            embedded = ipaddress.IPv4Address(ip.packed[-4:])
+            if (
+                embedded.is_private
+                or embedded.is_loopback
+                or embedded.is_link_local
+                or embedded.is_multicast
+                or embedded.is_reserved
+                or embedded.is_unspecified
+            ):
+                return False
+            return True
+
+        # 3. Standard checks for native IPv4 and IPv6 addresses
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return False
 
         return True
     except ValueError:
@@ -561,13 +586,25 @@ def extract_product_info_from_resolved_url(
                     if is_valid_product_title(cand):
                         candidate_title = cand
 
-            # Flipkart: e.g. /apple-iphone-15-black-128-gb/p/itm...
+            # Flipkart: e.g. /apple-iphone-15-black-128-gb/p/itm... or /dl/motorola-edge-70-pro.../p/itm...
             if "flipkart" in parsed.netloc.lower():
-                if parts and parts[0].lower() not in INVALID_SLUG_TOKENS:
-                    cand = parts[0].replace("-", " ").replace("_", " ")
-                    cand = re.sub(r"\s+", " ", cand).strip()
-                    if is_valid_product_title(cand):
-                        candidate_title = cand
+                for idx, p in enumerate(parts):
+                    if p == "p" and idx > 0:
+                        potential_slug = parts[idx - 1]
+                        if potential_slug.lower() not in INVALID_SLUG_TOKENS and len(potential_slug) > 2:
+                            cand = potential_slug.replace("-", " ").replace("_", " ")
+                            cand = re.sub(r"\s+", " ", cand).strip()
+                            if is_valid_product_title(cand):
+                                candidate_title = cand
+                                break
+                if not candidate_title and parts:
+                    for p in parts:
+                        if p.lower() not in INVALID_SLUG_TOKENS and len(p) > 2:
+                            cand = p.replace("-", " ").replace("_", " ")
+                            cand = re.sub(r"\s+", " ", cand).strip()
+                            if is_valid_product_title(cand):
+                                candidate_title = cand
+                                break
 
             # Croma: e.g. /apple-iphone-15-128gb-blue/p/300652
             if "croma" in parsed.netloc.lower():
@@ -610,6 +647,22 @@ def extract_product_info_from_resolved_url(
     if not candidate_title or not is_valid_product_title(candidate_title):
         return None, None, None
 
+    # Clean cosmetic noise (e.g. 'tailored fabric pantone titan blue') and format casing
+    cosmetic_patterns = [
+        r"\b(tailored fabric|pantone titan blue|tailored|fabric|pantone|titan|vegan leather|vegan|leather|polycarbonate)\b",
+    ]
+    for cp in cosmetic_patterns:
+        candidate_title = re.sub(cp, " ", candidate_title, flags=re.IGNORECASE)
+    candidate_title = re.sub(r"\s+", " ", candidate_title).strip()
+
+    if candidate_title.islower():
+        words = candidate_title.split()
+        candidate_title = " ".join(w.capitalize() for w in words)
+
+    candidate_title = re.sub(r"\b(gb|tb|mb|5g|4g|fe|se|gt)\b", lambda m: m.group(0).upper(), candidate_title, flags=re.IGNORECASE)
+    candidate_title = re.sub(r"\biphone\b", "iPhone", candidate_title, flags=re.IGNORECASE)
+    candidate_title = re.sub(r"\bipad\b", "iPad", candidate_title, flags=re.IGNORECASE)
+
     # Extract model and variant from the verified title
     from app.services.search_matcher import extract_model_identifiers
 
@@ -621,6 +674,9 @@ def extract_product_info_from_resolved_url(
             break
         elif fam == "moto_g":
             model_str = f"Moto G{val}"
+            break
+        elif fam == "moto_edge":
+            model_str = f"Motorola Edge {val}"
             break
         elif fam == "galaxy_s":
             model_str = f"Galaxy S{val}"
