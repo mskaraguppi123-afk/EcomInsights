@@ -477,6 +477,7 @@ export default function App() {
 
         <form onSubmit={handleUniversalSearch} style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           <input
+            id="universalSearchInput"
             type="text"
             placeholder="Paste Amazon / Flipkart / Croma product link or type product (e.g. iPhone 15, Sony WH-1000XM4)…"
             value={universalQuery}
@@ -894,7 +895,42 @@ export default function App() {
               </div>
             )}
 
-            {(!universalResult.has_reliable_match || universalResult.lowest_price === null || universalResult.stores.length === 0) ? (
+            {(universalResult.resolution_error || universalResult.extracted_title === 'Unresolved Product Link') ? (
+              <div style={{ textAlign: 'center', padding: '28px 16px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '10px' }}>
+                <div style={{ fontSize: '32px', marginBottom: '8px' }}>🔗⚠️</div>
+                <div style={{ fontSize: '16px', fontWeight: '800', color: '#9a3412' }}>
+                  Unable to Resolve Shortened Product Link
+                </div>
+                <p style={{ fontSize: '13px', color: '#7c2d12', margin: '8px 0 16px', maxWidth: '620px', marginLeft: 'auto', marginRight: 'auto', lineHeight: '1.5' }}>
+                  {universalResult.recommendation_summary || 'The shortened retailer link could not be resolved or did not provide a verifiable product name. Please search by product name instead.'}
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUniversalQuery('');
+                      const el = document.getElementById('universalSearchInput');
+                      if (el) el.focus();
+                    }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '12px',
+                      fontWeight: '700',
+                      color: '#ffffff',
+                      background: '#1f7359',
+                      border: 'none',
+                      padding: '8px 18px',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    🔍 Search by Product Name (e.g. iPhone 15)
+                  </button>
+                </div>
+              </div>
+            ) : (!universalResult.has_reliable_match || universalResult.lowest_price === null || universalResult.stores.length === 0) ? (
               <div style={{ textAlign: 'center', padding: '24px 16px', background: '#fff', border: '1px dashed #d5ddd8', borderRadius: '10px' }}>
                 <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔎</div>
                 <div style={{ fontSize: '15px', fontWeight: '800', color: '#18231f' }}>
@@ -1157,6 +1193,7 @@ export default function App() {
         {/* Filter Bar */}
         <div style={{ display: 'flex', gap: '16px', margin: '20px 0', flexWrap: 'wrap', alignItems: 'center' }}>
           <input
+            id="universalSearchInput"
             type="text"
             placeholder="Search products by name…"
             value={searchTerm}

@@ -418,8 +418,14 @@ def universal_product_search(
     allowed_list = [r.strip().lower() for r in trusted_retailers.split(",") if r.strip()] if trusted_retailers else None
     result = search_and_compare_product(query, db=db, trusted_retailers=allowed_list)
 
-    # If the product has no verified price in trusted sources, do not invent records in DB
-    if not result.has_reliable_match or result.lowest_price is None:
+    # If the product has no verified price in trusted sources or is not comparable, do not invent records in DB
+    if (
+        not result.has_reliable_match
+        or result.lowest_price is None
+        or not result.is_comparable_comparison
+        or result.extracted_title == "Unresolved Product Link"
+        or result.resolution_error
+    ):
         result.db_updated = False
         result.db_action = "no_verified_price"
         return result

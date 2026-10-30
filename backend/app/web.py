@@ -1175,7 +1175,22 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         }
 
         let storeGridHtml = '';
-        if (!hasReliable) {
+        if (data.resolution_error || data.extracted_title === 'Unresolved Product Link') {
+          storeGridHtml = `
+            <div style="text-align:center; padding:28px 16px; background:#fff7ed; border:1px solid #fed7aa; border-radius:10px;">
+              <div style="font-size:32px; margin-bottom:8px;">🔗⚠️</div>
+              <div style="font-size:16px; font-weight:800; color:#9a3412;">Unable to Resolve Shortened Product Link</div>
+              <p style="font-size:13px; color:#7c2d12; margin:8px 0 16px; max-width:620px; margin-left:auto; margin-right:auto; line-height:1.5;">
+                ${data.recommendation_summary || 'The shortened retailer link could not be resolved or did not provide a verifiable product name. Please search by product name instead.'}
+              </p>
+              <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
+                <button type="button" onclick="const el = document.getElementById('universalSearchInput'); if(el){ el.value=''; el.focus(); el.placeholder='Type product name e.g. iPhone 15'; }" style="display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:700; color:#ffffff; background:#1f7359; border:none; padding:9px 18px; border-radius:6px; cursor:pointer;">
+                  🔍 Search by Product Name (e.g. iPhone 15)
+                </button>
+              </div>
+            </div>
+          `;
+        } else if (!hasReliable) {
           const amzDirectLink = (data.direct_retailer_links && data.direct_retailer_links.amazon) || `https://www.amazon.in/s?k=${encodeURIComponent(data.extracted_title)}`;
           const fkDirectLink = (data.direct_retailer_links && data.direct_retailer_links.flipkart) || `https://www.flipkart.com/search?q=${encodeURIComponent(data.extracted_title)}`;
           storeGridHtml = `

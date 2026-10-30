@@ -1944,6 +1944,191 @@ def test_serpapi_direct_product_url_versus_fallback_search_url():
         assert not any(c.isspace() for c in fk.store_url)
 
 
+def test_shortened_url_amzn_in_0fhQ0IWO_unresolvable_rejects_d_and_shows_clear_error(client: TestClient):
+    """Regression test: submitting an unresolvable short link like 'https://amzn.in/d/0fhQ0IWO'
+    must NEVER extract 'd' as product title, must never query for 'd', must return clear error
+    with an option to search by product name, and must not create fake DB trajectory or savings."""
+    from app.services.safe_url_resolver import clear_mock_resolutions
+    clear_mock_resolutions()
+
+    short_link = "https://amzn.in/d/0fhQ0IWO"
+
+    # Direct unit check on title extraction
+    from app.services.link_search import extract_product_title
+    res = extract_product_title(short_link)
+    assert res.title != "d", "Must never return single character 'd' as product title!"
+    assert res.title == "Unresolved Product Link"
+    assert res.is_url is True
+    assert res.resolution_error is not None
+
+    # API Endpoint check
+    response = client.get(f"/api/v1/search/universal?query={short_link}")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["extracted_title"] != "d"
+    assert data["extracted_title"] == "Unresolved Product Link"
+    assert data["has_reliable_match"] is False
+    assert data["lowest_price"] is None
+    assert data["highest_price"] is None
+    assert data["max_savings"] is None
+    assert data["savings_percentage"] == 0.0
+    assert data["ai_insight"] is None, "AI forecast must be hidden when product cannot be verified"
+    assert data["stores"] == [], "Must not return fake or unrelated quotes for 'd'"
+    assert "Please search by product name" in data["recommendation_summary"]
+    assert data["suggested_action"] == "Search by product name"
+    assert data["db_updated"] is False, "Must not persist unresolved link into catalog"
+
+
+def test_shortened_url_resolves_safely_and_extracts_product_model_and_variant():
+    """Verify that a resolvable shortened retailer link safely follows redirects,
+    extracts the descriptive product name, model, and variant, and never extracts 'd'."""
+    from app.services.safe_url_resolver import (
+        register_mock_resolution,
+        clear_mock_resolutions,
+        extract_product_info_from_resolved_url,
+    )
+    from app.services.link_search import extract_product_title
+
+    clear_mock_resolutions()
+    short_url = "https://amzn.in/d/0fhQ0IWO"
+    resolved_destination = "https://www.amazon.in/Apple-iPhone-15-128-GB/dp/B0CHX1W1XY?th=1"
+    sample_html = "<title>Apple iPhone 15 (128 GB) - Black : Amazon.in: Electronics</title>"
+
+    register_mock_resolution(
+        short_url,
+        final_url=resolved_destination,
+        html_content=sample_html,
+    )
+
+    try:
+        # Unit check on info extractor
+        t, m, v = extract_product_info_from_resolved_url(resolved_destination, sample_html)
+        assert t == "Apple iPhone 15 (128 GB) - Black"
+        assert m == "iPhone 15"
+        assert "128GB" in v
+
+        # Integration check on extract_product_title
+        extracted = extract_product_title(short_url)
+        assert extracted.title != "d"
+        assert "iPhone 15" in extracted.title
+        assert extracted.is_url is True
+        assert extracted.source_platform == "Amazon India"
+        assert extracted.resolved_url == resolved_destination
+        assert extracted.resolution_error is None
+    finally:
+        clear_mock_resolutions()
+
+
+def test_cross_category_and_unrelated_listings_rejection():
+    """Verify that comparisons reject products from differing categories (e.g. running shoes, cooktops)
+    when searching for a phone (iPhone 15)."""
+    from app.services.link_search import is_unrelated_or_parts_item, detect_product_category
+
+    assert detect_product_category("Apple iPhone 15 128GB") == "smartphone"
+    assert detect_product_category("Puma Nitro Running Shoes") == "apparel_shoes"
+    assert detect_product_category("Prestige Induction Cooktop 2000W") == "appliance"
+    assert detect_product_category("HP Pavilion Gaming Laptop") == "laptop"
+
+    phone_query = "Apple iPhone 15 128GB"
+
+    # Cross-category items must be rejected
+    is_bad1, r1 = is_unrelated_or_parts_item("Puma Nitro Men's Running Shoes", "Amazon India", phone_query)
+    assert is_bad1 is True
+    assert "Cross-category conflict" in r1
+
+    is_bad2, r2 = is_unrelated_or_parts_item("Prestige Induction Cooktop 2000W", "Flipkart", phone_query)
+    assert is_bad2 is True
+    assert "Cross-category conflict" in r2
+
+    is_bad3, r3 = is_unrelated_or_parts_item("HP Pavilion 15.6 inch FHD Laptop", "Amazon India", phone_query)
+    assert is_bad3 is True
+    assert "Cross-category conflict" in r3
+
+    # Accessories must be rejected
+    is_bad4, r4 = is_unrelated_or_parts_item("Liquid Silicone Case for iPhone 15", "Amazon India", phone_query)
+    assert is_bad4 is True
+    assert "accessory" in r4.lower() or "passing mention" in r4.lower()
+
+    # Genuine matching phone must be accepted
+    is_bad5, _ = is_unrelated_or_parts_item("Apple iPhone 15 (128 GB) - Blue", "Flipkart", phone_query)
+    assert is_bad5 is False
+
+
+def test_ssrf_protection_blocks_private_and_local_network_addresses(client: TestClient):
+    """Verify that private and loopback IP addresses (SSRF targets) are blocked immediately."""
+    from app.services.safe_url_resolver import validate_url_for_ssrf
+
+    forbidden_urls = [
+        "http://127.0.0.1/latest/meta-data",
+        "http://localhost:8000/internal",
+        "http://169.254.169.254/latest/meta-data",
+        "http://10.0.0.1/admin",
+        "http://192.168.1.1/router",
+        "http://[::1]/secret",
+    ]
+
+    for f_url in forbidden_urls:
+        safe, err = validate_url_for_ssrf(f_url)
+        assert safe is False, f"URL {f_url} should have been blocked by SSRF protection!"
+        assert "blocked" in err.lower() or "forbidden" in err.lower() or "private" in err.lower() or "localhost" in err.lower()
+
+        # Check API response
+        resp = client.get(f"/api/v1/search/universal?query={f_url}")
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["has_reliable_match"] is False
+        assert d["lowest_price"] is None
+        assert "Security rejection" in (d.get("resolution_error") or "") or "blocked" in (d.get("resolution_error") or "").lower()
+        assert d["stores"] == []
+
+
+def test_forecast_and_savings_hidden_when_listings_not_comparable():
+    """Verify that when only 1 listing is found or listings have differing variants/conditions,
+    no best deal, savings calculation, or forecast is claimed."""
+    from decimal import Decimal
+    from unittest.mock import patch, MagicMock
+    from app.services.link_search import _query_serpapi_shopping
+
+    # Single verified listing for Moto G96
+    mock_items = [
+        {
+            "position": 1,
+            "title": "Motorola Moto G96 5G (128 GB)",
+            "source": "Flipkart",
+            "price": "₹16,999.00",
+            "extracted_price": 16999.0,
+            "link": "https://www.flipkart.com/motorola-moto-g96-5g-128-gb",
+            "in_stock": True,
+        }
+    ]
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"shopping_results": mock_items}
+
+    with patch("httpx.Client.get", return_value=mock_response):
+        res = _query_serpapi_shopping(
+            user_input="Moto G96",
+            extracted_title="Moto G96",
+            is_url=False,
+            source_platform="Keyword Query",
+            api_key="test_key",
+            currency="INR",
+            trusted_retailers=["amazon", "flipkart"],
+        )
+
+        assert res is not None
+        assert res.has_reliable_match is True
+        assert res.is_comparable_comparison is False, "Single listing cannot be a comparable comparison"
+        assert res.max_savings is None, "Must not claim savings for a single listing"
+        assert res.savings_percentage == 0.0
+        assert not any(s.is_lowest for s in res.stores), "Must not mark single listing as best deal"
+        assert res.ai_insight is None, "Forecast must be hidden when only 1 listing is present"
+        assert "At least two comparable listings" in res.recommendation_summary
+
+
+
 
 
 

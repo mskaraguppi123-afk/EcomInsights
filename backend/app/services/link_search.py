@@ -43,6 +43,8 @@ class UniversalSearchOut(BaseModel):
     comparable_condition: Optional[str] = "Brand New"
     direct_retailer_links: Dict[str, str] = {}
     ai_insight: Optional[Dict[str, Any]] = None
+    resolution_error: Optional[str] = None
+    suggested_action: Optional[str] = None
 
 
 def compute_ai_price_insight(
@@ -50,8 +52,13 @@ def compute_ai_price_insight(
     quotes: list[StoreQuote],
     base_price: Optional[Decimal] = None,
     db: Optional[Any] = None,
+    is_comparable_comparison: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    """Execute explainable ML Price Forecaster (Ensemble EMA + Linear OLS Trend) on price series."""
+    """Execute explainable ML Price Forecaster (Ensemble EMA + Linear OLS Trend) on price series.
+
+    Only computes forecast if real historical DB records exist or at least two valid,
+    comparable quotes of the same specification and condition exist.
+    """
     try:
         from ecominsights_ml.pipeline import analyze_price_series
 
@@ -76,10 +83,12 @@ def compute_ai_price_insight(
             except Exception:
                 pass
 
-        # 2. If no DB history yet, synthesize market trajectory from verified store quotes and benchmark
-        if not prices_seq and quotes:
-            valid_prices = [q.price for q in quotes if q.price is not None and q.price_status == "verified"]
-            if valid_prices:
+        # 2. If no DB history yet, only synthesize market trajectory if comparison is strictly comparable
+        # and has at least two valid comparable listings.
+        if not prices_seq and quotes and is_comparable_comparison:
+            comparable_quotes = [q for q in quotes if q.is_comparable and q.price is not None and q.price_status == "verified"]
+            if len(comparable_quotes) >= 2:
+                valid_prices = [q.price for q in comparable_quotes]
                 min_p = min(valid_prices)
                 max_p = max(valid_prices)
                 benchmark = base_price if base_price else max_p
@@ -93,8 +102,10 @@ def compute_ai_price_insight(
                 else:
                     prices_seq = valid_prices
 
-        if not prices_seq and base_price is not None:
-            prices_seq = [base_price]
+        # If we have real DB history with at least 2 points, we can analyze.
+        # But if we don't have comparable quotes or DB observations, return None.
+        if len(prices_seq) < 2 and (not quotes or not is_comparable_comparison):
+            return None
 
         if not prices_seq:
             return None
@@ -215,73 +226,134 @@ def extract_spec_tier(title: str, query: str = "") -> str:
     return "Standard"
 
 
-def extract_product_title(user_input: str) -> tuple[str, bool, str]:
+class ExtractedTitleResult(tuple):
+    """3-tuple holding (extracted_title, is_url, source_platform) plus resolution metadata."""
+
+    def __new__(
+        cls,
+        title: str,
+        is_url: bool,
+        source_platform: str,
+        resolution_error: Optional[str] = None,
+        resolved_url: Optional[str] = None,
+        model: Optional[str] = None,
+        variant: Optional[str] = None,
+    ):
+        instance = super().__new__(cls, (title, is_url, source_platform))
+        instance.title = title
+        instance.is_url = is_url
+        instance.source_platform = source_platform
+        instance.resolution_error = resolution_error
+        instance.resolved_url = resolved_url
+        instance.model = model
+        instance.variant = variant
+        return instance
+
+
+def extract_product_title(user_input: str) -> ExtractedTitleResult:
     """Parse a user input to determine if it is a product link or plain search query.
 
-    Returns:
-        (extracted_title, is_url, source_platform)
+    Safely resolves shortened retailer URLs (e.g. amzn.in, fkrt.it) on the server,
+    verifying SSRF protection and follow redirects up to 5 hops.
+    Never returns single-letter path fragments such as "d" as a product name.
     """
+    from app.services.safe_url_resolver import (
+        is_shortened_retailer_url,
+        is_valid_product_title,
+        resolve_short_url_safely,
+        validate_url_for_ssrf,
+        extract_product_info_from_resolved_url,
+        INVALID_SLUG_TOKENS,
+    )
+
     clean_input = user_input.strip()
     if not (clean_input.startswith("http://") or clean_input.startswith("https://")):
-        return clean_input, False, "Keyword Query"
+        return ExtractedTitleResult(clean_input, False, "Keyword Query")
 
-    # Input is a URL
+    # 1. SSRF validation on the initial input URL
+    is_safe, ssrf_err = validate_url_for_ssrf(clean_input)
+    if not is_safe:
+        return ExtractedTitleResult(
+            "Unresolved Product Link",
+            True,
+            "Blocked Target",
+            resolution_error=f"Security rejection: {ssrf_err}",
+        )
+
+    # 2. Check if this is a shortened or share retailer URL (e.g. amzn.in/d/0fhQ0IWO)
+    if is_shortened_retailer_url(clean_input):
+        final_url, html_snippet, err = resolve_short_url_safely(clean_input)
+        if err or not final_url:
+            platform = "Amazon India (Shortened URL)" if "amzn" in clean_input.lower() else "Shortened Retailer Link"
+            return ExtractedTitleResult(
+                "Unresolved Product Link",
+                True,
+                platform,
+                resolution_error=err or "Could not resolve shortened retailer link",
+            )
+
+        # Extract title, model, and variant from resolved destination page
+        cand_title, cand_model, cand_variant = extract_product_info_from_resolved_url(final_url, html_snippet)
+        if not cand_title or not is_valid_product_title(cand_title):
+            platform = "Amazon India" if "amazon" in final_url.lower() else ("Flipkart" if "flipkart" in final_url.lower() else "Shortened Retailer Link")
+            return ExtractedTitleResult(
+                "Unresolved Product Link",
+                True,
+                platform,
+                resolution_error="The resolved retailer page did not provide a verifiable product name.",
+                resolved_url=final_url,
+            )
+
+        platform = "Amazon India" if "amazon" in final_url.lower() else ("Flipkart" if "flipkart" in final_url.lower() else "Web Link")
+        return ExtractedTitleResult(
+            cand_title,
+            True,
+            platform,
+            resolved_url=final_url,
+            model=cand_model,
+            variant=cand_variant,
+        )
+
+    # 3. Direct retailer or standard web URL
     try:
-        parsed = urlparse(clean_input)
-        netloc = parsed.netloc.lower()
-        path = unquote(parsed.path).strip("/")
-        parts = [p for p in path.split("/") if p]
-
-        # Amazon URL handling
-        # Example: https://www.amazon.in/Sony-WH-1000XM4-Cancelling-Headphones-Bluetooth/dp/B0863TXGM3
-        if "amazon" in netloc:
-            platform = "Amazon India"
-            if parts and parts[0] not in ("dp", "gp", "d", "product"):
-                title = parts[0].replace("-", " ")
-                cleaned = re.sub(r"\s+", " ", title).strip()
-                return cleaned, True, platform
-            # If short URL like amazon.in/dp/B0863TXGM3
-            for idx, part in enumerate(parts):
-                if part in ("dp", "d", "product") and idx + 1 < len(parts):
-                    return f"Amazon product {parts[idx + 1]}", True, platform
-
-        # Flipkart URL handling
-        # Example: https://www.flipkart.com/apple-iphone-15-black-128-gb/p/itm6ac6485515ae4
-        if "flipkart" in netloc:
-            platform = "Flipkart"
-            if parts:
-                title = parts[0].replace("-", " ")
-                cleaned = re.sub(r"\s+", " ", title).strip()
-                return cleaned, True, platform
-
-        # Croma URL handling
-        # Example: https://www.croma.com/sony-wh-1000xm4-bluetooth-headphone/p/228741
-        if "croma" in netloc:
-            platform = "Croma Electronics"
-            if parts:
-                slug = parts[0] if parts[0] != "p" else (parts[1] if len(parts) > 1 else "")
-                title = slug.replace("-", " ")
-                return re.sub(r"\s+", " ", title).strip(), True, platform
-
-        # Reliance Digital URL handling
-        if "reliance" in netloc:
-            platform = "Reliance Digital"
-            if parts:
-                title = parts[0].replace("-", " ")
-                return re.sub(r"\s+", " ", title).strip(), True, platform
-
-        # Generic e-commerce URL
-        if parts:
-            slug = parts[0] if parts[0] not in ("p", "product", "item") else (parts[1] if len(parts) > 1 else parts[0])
-            title = slug.replace("-", " ").replace("_", " ")
-            cleaned = re.sub(r"\b[A-Za-z0-9]{12,}\b", "", title)  # remove product hash IDs
-            final_title = re.sub(r"\s+", " ", cleaned).strip()
-            return final_title or "Product", True, parsed.netloc
-
+        cand_title, cand_model, cand_variant = extract_product_info_from_resolved_url(clean_input)
+        if cand_title and is_valid_product_title(cand_title):
+            parsed = urlparse(clean_input)
+            netloc = parsed.netloc.lower()
+            platform = (
+                "Amazon India"
+                if "amazon" in netloc
+                else (
+                    "Flipkart"
+                    if "flipkart" in netloc
+                    else (
+                        "Croma Electronics"
+                        if "croma" in netloc
+                        else ("Reliance Digital" if "reliance" in netloc else netloc)
+                    )
+                )
+            )
+            return ExtractedTitleResult(
+                cand_title,
+                True,
+                platform,
+                resolved_url=clean_input,
+                model=cand_model,
+                variant=cand_variant,
+            )
     except Exception:
         pass
 
-    return clean_input, True, "Web Link"
+    # If direct URL could not be identified as a valid product
+    parsed = urlparse(clean_input)
+    platform = "Amazon India" if "amazon" in parsed.netloc.lower() else ("Flipkart" if "flipkart" in parsed.netloc.lower() else parsed.netloc)
+    return ExtractedTitleResult(
+        "Unresolved Product Link",
+        True,
+        platform,
+        resolution_error="The product URL path did not contain a recognizable product name or model.",
+        resolved_url=clean_input,
+    )
 
 
 def search_and_compare_product(
@@ -291,7 +363,53 @@ def search_and_compare_product(
     trusted_retailers: Optional[List[str] | Set[str]] = None,
 ) -> UniversalSearchOut:
     """Perform real-time multi-store price comparison from a link or keyword query."""
-    extracted_title, is_url, source_platform = extract_product_title(user_input)
+    extracted = extract_product_title(user_input)
+    extracted_title = extracted.title
+    is_url = extracted.is_url
+    source_platform = extracted.source_platform
+    resolution_error = getattr(extracted, "resolution_error", None)
+
+    # If the product link could not be resolved or title cannot be identified reliably,
+    # stop immediately and show clear error. Never run a generic search for "d" or invent prices.
+    if extracted_title == "Unresolved Product Link" or resolution_error:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        return UniversalSearchOut(
+            input_query=user_input,
+            extracted_title="Unresolved Product Link",
+            is_url=is_url,
+            source_platform=source_platform,
+            cheapest_store="Unable to resolve product link",
+            lowest_price=None,
+            highest_price=None,
+            max_savings=None,
+            savings_percentage=0.0,
+            recommendation_summary=(
+                f"Unable to identify product from shortened link '{user_input}'. "
+                f"{resolution_error or 'The link could not be resolved or did not provide a verifiable product name.'} "
+                "Please search by product name (e.g., 'iPhone 15') instead."
+            ),
+            data_source="Shortened URL Resolution Failed",
+            is_live_api=False,
+            stores=[],
+            tracked_product_id=None,
+            db_updated=False,
+            db_action=None,
+            has_reliable_match=False,
+            fetched_at=now_iso,
+            amazon_found=False,
+            flipkart_found=False,
+            retailer_status_notes=[
+                "Product URL could not be resolved to a verifiable product page.",
+                "Search by product keyword is recommended.",
+            ],
+            is_comparable_comparison=False,
+            comparable_spec=None,
+            comparable_condition=None,
+            direct_retailer_links={},
+            ai_insight=None,
+            resolution_error=resolution_error,
+            suggested_action="Search by product name",
+        )
 
     # 1. Attempt live SerpApi query if key configured
     if settings.serpapi_api_key and settings.serpapi_api_key.strip():
@@ -318,6 +436,52 @@ def search_and_compare_product(
         db=db,
         trusted_retailers=trusted_retailers,
     )
+
+
+PRODUCT_CATEGORY_KEYWORDS: dict[str, set[str]] = {
+    "smartphone": {
+        "iphone", "galaxy s", "galaxy z", "galaxy m", "galaxy a", "galaxy fold", "galaxy flip",
+        "pixel", "oneplus", "moto g", "moto edge", "motorola", "redmi", "xiaomi", "realme",
+        "smartphone", "smart phone", "mobile phone", "cell phone"
+    },
+    "audio": {
+        "headphones", "headphone", "earbuds", "earbud", "earphones", "earphone",
+        "headset", "speaker", "soundbar", "wh-1000xm", "wf-1000xm", "airpods"
+    },
+    "laptop": {
+        "laptop", "notebook", "macbook", "chromebook", "thinkpad", "ideapad", "zenbook"
+    },
+    "tablet": {
+        "ipad", "tablet", "tab s", "tab a", "pad"
+    },
+    "smartwatch": {
+        "smartwatch", "smart watch", "apple watch", "galaxy watch", "fitbit"
+    },
+    "television": {
+        "television", "smart tv", "led tv", "oled tv", "qled tv", "bravia"
+    },
+    "appliance": {
+        "refrigerator", "washing machine", "microwave", "air conditioner", "vacuum",
+        "cooktop", "mixer grinder", "blender", "chimney", "air fryer"
+    },
+    "apparel_shoes": {
+        "shoes", "sneakers", "running shoes", "shirt", "t-shirt", "tshirt",
+        "jeans", "trousers", "jacket", "hoodie", "dress", "sandals", "slippers"
+    },
+    "hardware_tools": {
+        "screwdriver", "wrench", "hammer", "drill", "pliers", "soldering", "spares"
+    },
+}
+
+
+def detect_product_category(text: str) -> Optional[str]:
+    """Identify product category from title or query."""
+    norm = text.lower()
+    for cat, keywords in PRODUCT_CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if re.search(rf"\b{re.escape(kw)}\b", norm):
+                return cat
+    return None
 
 
 ACCESSORY_BLACKLIST = {
@@ -451,6 +615,12 @@ def is_unrelated_or_parts_item(title: str, source: str, query: str, link: str = 
         diff_tools = matched_tools - q_words
         if diff_tools:
             return True, f"Rejected parts/tools keyword in title: {diff_tools}"
+
+    # 7. Cross-category conflict check (e.g. query is smartphone, candidate is shoes, cookware, tools, apparel)
+    q_cat = detect_product_category(query)
+    c_cat = detect_product_category(title)
+    if q_cat and c_cat and q_cat != c_cat:
+        return True, f"Cross-category conflict: expected '{q_cat}', candidate is '{c_cat}'"
 
     return False, ""
 
