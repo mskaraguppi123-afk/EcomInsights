@@ -253,105 +253,97 @@ class ExtractedTitleResult(tuple):
 def extract_product_title(user_input: str) -> ExtractedTitleResult:
     """Parse a user input to determine if it is a product link or plain search query.
 
-    Safely resolves shortened retailer URLs (e.g. amzn.in, fkrt.it) on the server,
-    verifying SSRF protection and follow redirects up to 5 hops.
-    Never returns single-letter path fragments such as "d" as a product name.
+    Identifies retailer from submitted URL and resolves product title, model, and variant
+    from the URL slug, known product catalog, or resolved destination page.
+    Never returns hostname (e.g. 'amazon.in', 'flipkart.com') or path fragments ('dp', 'd', 'p')
+    as the product title or query.
     """
     from app.services.safe_url_resolver import (
         is_shortened_retailer_url,
         is_valid_product_title,
+        is_disallowed_search_query,
+        identify_retailer_from_url,
         resolve_short_url_safely,
-        validate_url_for_ssrf,
         extract_product_info_from_resolved_url,
-        INVALID_SLUG_TOKENS,
+        is_ip_safe_and_public,
     )
+    import ipaddress
 
     clean_input = user_input.strip()
     if not (clean_input.startswith("http://") or clean_input.startswith("https://")):
         return ExtractedTitleResult(clean_input, False, "Keyword Query")
 
-    # 1. SSRF validation on the initial input URL
-    is_safe, ssrf_err = validate_url_for_ssrf(clean_input)
-    if not is_safe:
-        return ExtractedTitleResult(
-            "Unresolved Product Link",
-            True,
-            "Blocked Target",
-            resolution_error=f"Security rejection: {ssrf_err}",
-        )
+    retailer_name, store_code = identify_retailer_from_url(clean_input)
 
-    # 2. Check if this is a shortened or share retailer URL (e.g. amzn.in/d/0fhQ0IWO)
-    if is_shortened_retailer_url(clean_input):
-        final_url, html_snippet, err = resolve_short_url_safely(clean_input)
-        if err or not final_url:
-            platform = "Amazon India (Shortened URL)" if "amzn" in clean_input.lower() else "Shortened Retailer Link"
+    # 1. SSRF validation for literal IP / localhost destinations
+    try:
+        parsed = urlparse(clean_input)
+        norm_host = (parsed.hostname or "").strip().lower()
+        if norm_host in ("localhost", "localhost.localdomain", "broadcasthost"):
             return ExtractedTitleResult(
-                "Unresolved Product Link",
+                "",
                 True,
-                platform,
-                resolution_error=err or "Could not resolve shortened retailer link",
+                "Blocked Target",
+                resolution_error="Security rejection: Access to localhost or loopback destinations is blocked",
             )
+        try:
+            ip = ipaddress.ip_address(norm_host)
+            if not is_ip_safe_and_public(str(ip)):
+                return ExtractedTitleResult(
+                    "",
+                    True,
+                    "Blocked Target",
+                    resolution_error=f"Security rejection: Access to private/local network address '{norm_host}' is blocked",
+                )
+        except ValueError:
+            pass
+    except Exception as exc:
+        return ExtractedTitleResult("", True, retailer_name, resolution_error=f"Malformed URL: {exc}")
 
-        # Extract title, model, and variant from resolved destination page
-        cand_title, cand_model, cand_variant = extract_product_info_from_resolved_url(final_url, html_snippet)
-        if not cand_title or not is_valid_product_title(cand_title):
-            platform = "Amazon India" if "amazon" in final_url.lower() else ("Flipkart" if "flipkart" in final_url.lower() else "Shortened Retailer Link")
-            return ExtractedTitleResult(
-                "Unresolved Product Link",
-                True,
-                platform,
-                resolution_error="The resolved retailer page did not provide a verifiable product name.",
-                resolved_url=final_url,
-            )
-
-        platform = "Amazon India" if "amazon" in final_url.lower() else ("Flipkart" if "flipkart" in final_url.lower() else "Web Link")
+    # 2. Check if this full URL already contains a valid product slug or known catalog ID
+    # (e.g. /Apple-iPhone-15-128-GB/dp/B0CHX1W1XY or /dp/B0CHX1W1XY or /apple-iphone-15-black-128-gb/p/itm...)
+    cand_title, cand_model, cand_variant = extract_product_info_from_resolved_url(clean_input)
+    if cand_title and is_valid_product_title(cand_title) and not is_disallowed_search_query(cand_title):
         return ExtractedTitleResult(
             cand_title,
             True,
-            platform,
-            resolved_url=final_url,
+            retailer_name,
+            resolved_url=clean_input,
             model=cand_model,
             variant=cand_variant,
         )
 
-    # 3. Direct retailer or standard web URL
-    try:
-        cand_title, cand_model, cand_variant = extract_product_info_from_resolved_url(clean_input)
-        if cand_title and is_valid_product_title(cand_title):
-            parsed = urlparse(clean_input)
-            netloc = parsed.netloc.lower()
-            platform = (
-                "Amazon India"
-                if "amazon" in netloc
-                else (
-                    "Flipkart"
-                    if "flipkart" in netloc
-                    else (
-                        "Croma Electronics"
-                        if "croma" in netloc
-                        else ("Reliance Digital" if "reliance" in netloc else netloc)
-                    )
-                )
+    # 3. If shortened or share link, follow redirects safely on server
+    if is_shortened_retailer_url(clean_input):
+        final_url, html_snippet, err = resolve_short_url_safely(clean_input)
+        if err or not final_url:
+            return ExtractedTitleResult(
+                "Unresolved Product Link",
+                True,
+                retailer_name,
+                resolution_error=err or f"Could not resolve shortened {retailer_name} link. Please search by product name directly.",
             )
+
+        # Extract title, model, and variant from resolved destination page
+        cand_title, cand_model, cand_variant = extract_product_info_from_resolved_url(final_url, html_snippet)
+        if cand_title and is_valid_product_title(cand_title) and not is_disallowed_search_query(cand_title):
+            dest_retailer, _ = identify_retailer_from_url(final_url)
             return ExtractedTitleResult(
                 cand_title,
                 True,
-                platform,
-                resolved_url=clean_input,
+                dest_retailer if dest_retailer != "Web Link" else retailer_name,
+                resolved_url=final_url,
                 model=cand_model,
                 variant=cand_variant,
             )
-    except Exception:
-        pass
 
-    # If direct URL could not be identified as a valid product
-    parsed = urlparse(clean_input)
-    platform = "Amazon India" if "amazon" in parsed.netloc.lower() else ("Flipkart" if "flipkart" in parsed.netloc.lower() else parsed.netloc)
+    # 4. If product title cannot be extracted reliably (e.g. homepage, search page, unknown ID):
+    # NEVER return retailer domain or path fragment like 'amazon.in' or 'dp'
     return ExtractedTitleResult(
         "Unresolved Product Link",
         True,
-        platform,
-        resolution_error="The product URL path did not contain a recognizable product name or model.",
+        retailer_name,
+        resolution_error=f"Unable to extract product title from the submitted {retailer_name} link. Please search by product name directly.",
         resolved_url=clean_input,
     )
 
@@ -363,32 +355,48 @@ def search_and_compare_product(
     trusted_retailers: Optional[List[str] | Set[str]] = None,
 ) -> UniversalSearchOut:
     """Perform real-time multi-store price comparison from a link or keyword query."""
+    from app.services.safe_url_resolver import is_disallowed_search_query, identify_retailer_from_url
+
     extracted = extract_product_title(user_input)
     extracted_title = extracted.title
     is_url = extracted.is_url
     source_platform = extracted.source_platform
     resolution_error = getattr(extracted, "resolution_error", None)
 
-    # If the product link could not be resolved or title cannot be identified reliably,
-    # stop immediately and show clear error. Never run a generic search for "d" or invent prices.
-    if extracted_title == "Unresolved Product Link" or resolution_error:
+    # If the product title cannot be extracted reliably or is a disallowed search term (e.g. "amazon.in", "dp", "d"):
+    # Stop and show a clear message asking the user to enter the product name.
+    # NEVER run a retailer-only search for "amazon.in" or fragments.
+    if (
+        is_disallowed_search_query(extracted_title)
+        or not extracted_title
+        or extracted_title == "Unresolved Product Link"
+        or resolution_error
+    ):
         now_iso = datetime.now(timezone.utc).isoformat()
+        retailer_name, store_code = identify_retailer_from_url(user_input) if is_url else ("Keyword Query", "unknown")
+
+        direct_links = {}
+        if store_code == "amazon":
+            direct_links["amazon"] = "https://www.amazon.in"
+        elif store_code == "flipkart":
+            direct_links["flipkart"] = "https://www.flipkart.com"
+
         return UniversalSearchOut(
             input_query=user_input,
-            extracted_title="Unresolved Product Link",
+            extracted_title="Unresolved Product Link" if extracted_title in ("Unresolved Product Link", "") else extracted_title,
             is_url=is_url,
-            source_platform=source_platform,
-            cheapest_store="Unable to resolve product link",
+            source_platform=retailer_name,
+            cheapest_store="Unable to extract product name",
             lowest_price=None,
             highest_price=None,
             max_savings=None,
             savings_percentage=0.0,
             recommendation_summary=(
-                f"Unable to identify product from shortened link '{user_input}'. "
-                f"{resolution_error or 'The link could not be resolved or did not provide a verifiable product name.'} "
-                "Please search by product name (e.g., 'iPhone 15') instead."
+                resolution_error
+                if resolution_error and "Please search by product name" in resolution_error
+                else f"Unable to extract product title from the submitted {retailer_name} link. Please search by product name directly."
             ),
-            data_source="Shortened URL Resolution Failed",
+            data_source="URL Extraction Stopped",
             is_live_api=False,
             stores=[],
             tracked_product_id=None,
@@ -399,15 +407,15 @@ def search_and_compare_product(
             amazon_found=False,
             flipkart_found=False,
             retailer_status_notes=[
-                "Product URL could not be resolved to a verifiable product page.",
-                "Search by product keyword is recommended.",
+                f"{retailer_name}: The URL did not provide a recognizable product name or model.",
+                "Please enter the product name directly instead of the store URL.",
             ],
             is_comparable_comparison=False,
             comparable_spec=None,
             comparable_condition=None,
-            direct_retailer_links={},
+            direct_retailer_links=direct_links,
             ai_insight=None,
-            resolution_error=resolution_error,
+            resolution_error=resolution_error or f"Unable to extract product title from {retailer_name} link. Please search by product name directly.",
             suggested_action="Search by product name",
         )
 
@@ -836,6 +844,10 @@ def clean_product_search_term(title: str) -> str:
     Preserves meaningful model numbers, generations, and variants.
     """
     from app.services.search_matcher import match_product
+    from app.services.safe_url_resolver import is_disallowed_search_query
+
+    if is_disallowed_search_query(title):
+        return ""
 
     t = re.sub(r"^(Amazon product|Flipkart product)\s+[A-Za-z0-9]+", "", title, flags=re.IGNORECASE).strip()
     if not t:
@@ -964,6 +976,29 @@ def resolve_base_price(title: str, db: Optional[Any] = None) -> Optional[Decimal
     if best_known_price is not None:
         return best_known_price
 
+    # 2b. Secondary pass: try normalized title (without storage, colors, or spec suffixes) against KNOWN_PRODUCTS
+    clean_title = re.sub(
+        r"\b(?:\d+\s*(?:gb|tb|mb|ram|rom)|black|white|blue|green|yellow|pink|natural|titanium|starlight|midnight|purple|red|gold|silver|grey|gray|5g|4g)\b",
+        " ",
+        title,
+        flags=re.IGNORECASE,
+    )
+    clean_title = re.sub(r"\s+", " ", clean_title).strip()
+    if clean_title and clean_title != title:
+        for key, price in KNOWN_PRODUCTS.items():
+            m1, s1, r1 = match_product(clean_title, key)
+            m2, s2, r2 = match_product(key, clean_title)
+            if (not m1 and "Conflict" in (r1 or "")) or (not m2 and "Conflict" in (r2 or "")):
+                continue
+            effective_match = m1 or (m2 and s2 >= 70)
+            effective_score = max(s1, s2) if (m1 or m2) else 0
+            if effective_match and effective_score >= 70 and effective_score > best_score:
+                best_score = effective_score
+                best_known_price = price
+
+    if best_known_price is not None:
+        return best_known_price
+
     # 3. No reliable price found in trusted data source
     return None
 
@@ -1039,6 +1074,11 @@ def _query_serpapi_shopping(
 
         if not clean_q:
             clean_q = extracted_title.strip()
+
+        from app.services.safe_url_resolver import is_disallowed_search_query
+        if is_disallowed_search_query(clean_q) or is_disallowed_search_query(extracted_title):
+            logger.warning("Aborted SerpApi query: disallowed query '%s' (retailer domain or path fragment)", clean_q)
+            return None
 
         expected_base = resolve_base_price(clean_q, db=db)
         q_info = extract_model_identifiers(clean_q)

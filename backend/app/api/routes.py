@@ -419,10 +419,13 @@ def universal_product_search(
     result = search_and_compare_product(query, db=db, trusted_retailers=allowed_list)
 
     # If the product has no verified price in trusted sources or is not comparable, do not invent records in DB
+    from app.services.safe_url_resolver import is_disallowed_search_query
     if (
         not result.has_reliable_match
         or result.lowest_price is None
         or not result.is_comparable_comparison
+        or not result.extracted_title
+        or is_disallowed_search_query(result.extracted_title)
         or result.extracted_title == "Unresolved Product Link"
         or result.resolution_error
     ):

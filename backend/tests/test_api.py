@@ -2128,6 +2128,302 @@ def test_forecast_and_savings_hidden_when_listings_not_comparable():
         assert "At least two comparable listings" in res.recommendation_summary
 
 
+def test_full_amazon_url_extracts_product_name_not_retailer_domain(client: TestClient):
+    """Regression test: submitting a full Amazon product URL like
+    'https://www.amazon.in/Apple-iPhone-15-128-GB/dp/B0CHX1W1XY'
+    must identify the retailer as 'Amazon India', extract 'Apple iPhone 15 128 GB'
+    as the product title, and MUST NEVER search SerpApi for 'amazon.in' or 'www.amazon.in'."""
+    from unittest.mock import patch, MagicMock
+    from app.services.link_search import extract_product_title, search_and_compare_product
+    from app.core.config import settings
+
+    url = "https://www.amazon.in/Apple-iPhone-15-128-GB/dp/B0CHX1W1XY"
+
+    # 1. Direct title extraction check
+    extracted = extract_product_title(url)
+    assert extracted.title == "Apple iPhone 15 128 GB"
+    assert extracted.title != "amazon.in"
+    assert extracted.title != "www.amazon.in"
+    assert extracted.source_platform == "Amazon India"
+    assert extracted.is_url is True
+
+    # 2. End-to-end SerpApi query check: verify query sent to SerpApi contains 'iPhone 15' and NEVER 'amazon.in'
+    mock_items = [
+        {
+            "position": 1,
+            "title": "Apple iPhone 15 (128 GB) - Black",
+            "source": "Amazon India",
+            "price": "₹64,900.00",
+            "extracted_price": 64900.0,
+            "link": "https://www.amazon.in/dp/B0CHX1W1XY",
+        },
+        {
+            "position": 2,
+            "title": "Apple iPhone 15 (128 GB) - Blue",
+            "source": "Flipkart",
+            "price": "₹65,999.00",
+            "extracted_price": 65999.0,
+            "link": "https://www.flipkart.com/apple-iphone-15-128-gb",
+        },
+    ]
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"shopping_results": mock_items}
+
+    with patch.object(settings, "serpapi_api_key", "test_key"), \
+         patch("httpx.Client.get", return_value=mock_resp) as mock_get:
+        res = search_and_compare_product(url)
+
+        assert res.extracted_title == "Apple iPhone 15 128 GB"
+        assert res.has_reliable_match is True
+        assert res.lowest_price is not None
+        assert mock_get.called
+
+        for call_args in mock_get.call_args_list:
+            params = call_args.kwargs.get("params") or (call_args.args[1] if len(call_args.args) > 1 else {})
+            q = params.get("q", "")
+            assert "amazon.in" not in q.lower(), f"Disallowed domain 'amazon.in' found in SerpApi query: '{q}'"
+            assert "www.amazon.in" not in q.lower()
+            assert "iphone 15" in q.lower(), f"Expected product 'iPhone 15' in SerpApi query, got: '{q}'"
+
+
+def test_full_flipkart_url_extracts_product_name_not_retailer_domain(client: TestClient):
+    """Regression test: submitting a full Flipkart product URL like
+    'https://www.flipkart.com/apple-iphone-15-black-128-gb/p/itm6ac6485515ae4'
+    must identify the retailer as 'Flipkart', extract 'Apple iPhone 15 Black 128 GB'
+    as the product title, and MUST NEVER search SerpApi for 'flipkart.com'."""
+    from unittest.mock import patch, MagicMock
+    from app.services.link_search import extract_product_title, search_and_compare_product
+    from app.core.config import settings
+
+    url = "https://www.flipkart.com/apple-iphone-15-black-128-gb/p/itm6ac6485515ae4"
+
+    extracted = extract_product_title(url)
+    assert "iphone 15" in extracted.title.lower()
+    assert "flipkart.com" not in extracted.title.lower()
+    assert extracted.source_platform == "Flipkart"
+    assert extracted.is_url is True
+
+    mock_items = [
+        {
+            "position": 1,
+            "title": "Apple iPhone 15 (128 GB) - Black",
+            "source": "Flipkart",
+            "price": "₹64,900.00",
+            "extracted_price": 64900.0,
+            "link": url,
+        },
+        {
+            "position": 2,
+            "title": "Apple iPhone 15 (128 GB) - Blue",
+            "source": "Amazon India",
+            "price": "₹65,999.00",
+            "extracted_price": 65999.0,
+            "link": "https://www.amazon.in/dp/B0CHX1W1XY",
+        },
+    ]
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"shopping_results": mock_items}
+
+    with patch.object(settings, "serpapi_api_key", "test_key"), \
+         patch("httpx.Client.get", return_value=mock_resp) as mock_get:
+        res = search_and_compare_product(url)
+
+        assert "iphone 15" in res.extracted_title.lower()
+        assert res.has_reliable_match is True
+        assert mock_get.called
+
+        for call_args in mock_get.call_args_list:
+            params = call_args.kwargs.get("params") or {}
+            q = params.get("q", "")
+            assert "flipkart.com" not in q.lower(), f"Disallowed domain 'flipkart.com' found in SerpApi query: '{q}'"
+            assert "iphone 15" in q.lower(), f"Expected product 'iPhone 15' in SerpApi query, got: '{q}'"
+
+
+def test_full_amazon_asin_url_extracts_product_name_not_dp_or_domain(client: TestClient):
+    """Regression test: submitting an Amazon product URL with only an ASIN like
+    'https://www.amazon.in/dp/B0CHX1W1XY'
+    must identify the product from catalog metadata and MUST NEVER search for 'dp' or 'amazon.in'."""
+    from unittest.mock import patch, MagicMock
+    from app.services.link_search import extract_product_title, search_and_compare_product
+    from app.core.config import settings
+
+    url = "https://www.amazon.in/dp/B0CHX1W1XY"
+
+    extracted = extract_product_title(url)
+    assert extracted.title != "dp", "Must never return path fragment 'dp' as product title!"
+    assert "amazon.in" not in extracted.title.lower()
+    assert "iPhone 15" in extracted.title
+    assert extracted.source_platform == "Amazon India"
+
+    mock_items = [
+        {
+            "position": 1,
+            "title": "Apple iPhone 15 (128 GB) - Black",
+            "source": "Amazon India",
+            "price": "₹64,900.00",
+            "extracted_price": 64900.0,
+            "link": url,
+        },
+        {
+            "position": 2,
+            "title": "Apple iPhone 15 (128 GB) - Black",
+            "source": "Flipkart",
+            "price": "₹65,999.00",
+            "extracted_price": 65999.0,
+            "link": "https://www.flipkart.com/apple-iphone-15-black-128-gb/p/itm6ac6485515ae4",
+        },
+    ]
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"shopping_results": mock_items}
+
+    with patch.object(settings, "serpapi_api_key", "test_key"), \
+         patch("httpx.Client.get", return_value=mock_resp) as mock_get:
+        res = search_and_compare_product(url)
+
+        assert "iphone 15" in res.extracted_title.lower()
+        for call_args in mock_get.call_args_list:
+            params = call_args.kwargs.get("params") or {}
+            q = params.get("q", "")
+            assert "amazon.in" not in q.lower()
+            assert q.strip().lower() != "dp"
+            assert "iphone 15" in q.lower()
+
+
+def test_bare_retailer_domains_halt_without_serpapi_search(client: TestClient):
+    """Regression test: bare retailer domains or non-product paths (e.g. 'https://www.amazon.in',
+    'https://www.flipkart.com', 'https://www.amazon.in/dp/') must stop gracefully with a clear message
+    asking the user to enter the product name, and must NEVER invoke SerpApi with retailer domains."""
+    from unittest.mock import patch
+    from app.services.link_search import search_and_compare_product
+    from app.core.config import settings
+
+    bare_urls = [
+        "https://www.amazon.in",
+        "https://www.amazon.in/",
+        "https://www.flipkart.com",
+        "https://www.flipkart.com/",
+        "https://www.amazon.in/dp/",
+    ]
+
+    for u in bare_urls:
+        with patch.object(settings, "serpapi_api_key", "test_key"), \
+             patch("httpx.Client.get") as mock_get:
+            res = search_and_compare_product(u)
+
+            assert res.has_reliable_match is False
+            assert res.lowest_price is None
+            assert res.stores == []
+            assert "Please search by product name" in res.recommendation_summary or "Please enter the product name" in res.recommendation_summary
+            assert res.suggested_action == "Search by product name"
+            # SerpApi must NEVER be called
+            assert not mock_get.called, f"SerpApi was unexpectedly called for bare retailer link '{u}'"
+
+
+def test_shortened_amazon_url_resolves_and_searches_product_not_shortlink_domain():
+    """Regression test: submitting shortened Amazon link resolves to real product URL,
+    extracts the product name, and queries SerpApi with the product name (never 'amzn.in' or 'd')."""
+    from unittest.mock import patch, MagicMock
+    from app.services.safe_url_resolver import register_mock_resolution, clear_mock_resolutions
+    from app.services.link_search import extract_product_title, search_and_compare_product
+    from app.core.config import settings
+
+    clear_mock_resolutions()
+    short_link = "https://amzn.in/d/0fhQ0IWO"
+    full_dest = "https://www.amazon.in/Apple-iPhone-15-128-GB/dp/B0CHX1W1XY"
+    register_mock_resolution(short_link, full_dest, "<html><title>Apple iPhone 15 128 GB</title></html>")
+
+    try:
+        extracted = extract_product_title(short_link)
+        assert extracted.title == "Apple iPhone 15 128 GB"
+        assert extracted.title != "d"
+        assert extracted.title != "amzn.in"
+        assert extracted.source_platform == "Amazon India"
+
+        mock_items = [
+            {
+                "position": 1,
+                "title": "Apple iPhone 15 (128 GB) - Black",
+                "source": "Amazon India",
+                "price": "₹64,900.00",
+                "extracted_price": 64900.0,
+                "link": full_dest,
+            },
+            {
+                "position": 2,
+                "title": "Apple iPhone 15 (128 GB) - Blue",
+                "source": "Flipkart",
+                "price": "₹65,999.00",
+                "extracted_price": 65999.0,
+                "link": "https://www.flipkart.com/apple-iphone-15-128-gb",
+            },
+        ]
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"shopping_results": mock_items}
+
+        with patch.object(settings, "serpapi_api_key", "test_key"), \
+             patch("httpx.Client.get", return_value=mock_resp) as mock_get:
+            res = search_and_compare_product(short_link)
+
+            assert res.extracted_title == "Apple iPhone 15 128 GB"
+            assert res.has_reliable_match is True
+            assert mock_get.called
+
+            for call_args in mock_get.call_args_list:
+                params = call_args.kwargs.get("params") or {}
+                q = params.get("q", "")
+                assert "amzn.in" not in q.lower()
+                assert "amazon.in" not in q.lower()
+                assert q.strip().lower() != "d"
+                assert "iphone 15" in q.lower()
+    finally:
+        clear_mock_resolutions()
+
+
+def test_disallowed_search_query_guards():
+    """Verify that is_disallowed_search_query detects and rejects domains, hostnames, and fragments."""
+    from app.services.safe_url_resolver import is_disallowed_search_query
+
+    disallowed = [
+        "amazon.in",
+        "www.amazon.in",
+        "flipkart.com",
+        "www.flipkart.com",
+        "amzn.in",
+        "croma.com",
+        "dp",
+        "d",
+        "p",
+        "gp",
+        "product",
+        "buy",
+        "item",
+        "unresolved product link",
+        "unknown product",
+    ]
+    for term in disallowed:
+        assert is_disallowed_search_query(term) is True, f"'{term}' should be recognized as disallowed search query"
+
+    allowed = [
+        "iPhone 15",
+        "Apple iPhone 15 128 GB",
+        "Moto G96",
+        "Motorola Moto G 96",
+        "Sony WH-1000XM4",
+        "Samsung Galaxy S24",
+    ]
+    for term in allowed:
+        assert is_disallowed_search_query(term) is False, f"'{term}' should be recognized as a valid search query"
+
+
+
 
 
 

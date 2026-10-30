@@ -288,6 +288,11 @@ def build_product_query_for_search(raw_query: str) -> str:
     q = re.sub(r"[()\[\]{},;:*#~`!@$%^&=+_|?<>/\\]+", " ", q)
     # Normalize multiple whitespace
     q = re.sub(r"\s+", " ", q).strip()
+
+    from app.services.safe_url_resolver import is_disallowed_search_query
+    if is_disallowed_search_query(q):
+        return ""
+
     return q
 
 

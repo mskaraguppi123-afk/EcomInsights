@@ -37,7 +37,10 @@ def extract_model_identifiers(text: str) -> dict[str, Any]:
     token_set = set(tokens)
 
     # Standalone numbers (e.g. "16", "18", "15", "10", "9")
-    numbers = set(re.findall(r"\b\d+\b", norm))
+    # Exclude technical unit metrics (e.g. "128gb", "256 gb", "5000mah", "120hz", "50mp") from model numbers
+    unit_numbers = set(re.findall(r"\b(\d+)\s*(?:gb|tb|mb|hz|mah|mp|w|ghz|kg|cm|mm|inch|in|k)\b", norm))
+    raw_numbers = set(re.findall(r"\b\d+\b", norm))
+    numbers = raw_numbers - unit_numbers
     # Extract embedded numbers from alphanumeric model codes (e.g. "96" in "g96", "85" in "g85", "24" in "s24")
     # Exclude technical unit metrics like 128gb, 5000mah, 120hz, 50mp
     for code in re.findall(r"\b[a-z]{1,3}(\d+)\b", norm):

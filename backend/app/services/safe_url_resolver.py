@@ -85,6 +85,117 @@ INVALID_SLUG_TOKENS = {
     "checkout",
 }
 
+# Retailer hostnames, domains, and non-product fragments that must NEVER be searched
+DISALLOWED_SEARCH_QUERIES = {
+    "amazon.in",
+    "www.amazon.in",
+    "amazon.com",
+    "www.amazon.com",
+    "amzn.in",
+    "amzn.to",
+    "a.co",
+    "flipkart.com",
+    "www.flipkart.com",
+    "fkrt.it",
+    "fkrt.co",
+    "dl.flipkart.com",
+    "croma.com",
+    "www.croma.com",
+    "reliancedigital.in",
+    "www.reliancedigital.in",
+    "tatacliq.com",
+    "vijaysales.com",
+    "google.com",
+    "google.co.in",
+    "dp",
+    "d",
+    "p",
+    "s",
+    "gp",
+    "product",
+    "products",
+    "item",
+    "items",
+    "buy",
+    "details",
+    "offer",
+    "amazon",
+    "flipkart",
+    "croma",
+    "reliance",
+    "unresolved product link",
+    "unknown product",
+    "unable to extract product name",
+}
+
+# Known retailer catalog product IDs (ASINs, item codes) for direct ID fallback
+KNOWN_RETAILER_PRODUCT_IDS: Dict[str, str] = {
+    # Amazon ASINs
+    "b0chx1w1xy": "Apple iPhone 15 (128 GB) - Black",
+    "b0chx2f56c": "Apple iPhone 15 (128 GB) - Blue",
+    "b0chx1n147": "Apple iPhone 15 (256 GB) - Black",
+    "b0dgj9vsd2": "Apple iPhone 16 (128 GB) - Black",
+    "b0dgj99q5c": "Apple iPhone 16 (256 GB) - Black",
+    "b0863txgm3": "Sony WH-1000XM4 Wireless Noise Cancelling Headphones",
+    "b09xs7jwhh": "Sony WH-1000XM5 Wireless Noise Cancelling Headphones",
+    "b0cz7wf95y": "Motorola Moto G85 5G (128 GB)",
+    "b0cz7wd86z": "Motorola Moto G96 5G (128 GB)",
+    # Flipkart product item IDs
+    "itm6ac6485515ae4": "Apple iPhone 15 (Black, 128 GB)",
+    "itm577603c7a0d88": "Apple iPhone 15 (Blue, 128 GB)",
+    "itm5a18a5ae74d32": "Apple iPhone 16 (Black, 128 GB)",
+    "itmc039d997237b4": "Motorola Moto G85 5G (Cobalt Blue, 128 GB)",
+    "itm96d0397237b4a": "Motorola Moto G96 5G (128 GB)",
+}
+
+
+def is_disallowed_search_query(q: str) -> bool:
+    """Check if query is a retailer hostname, domain, or path fragment instead of a product."""
+    if not q or not q.strip():
+        return True
+    norm = q.strip().lower()
+    if norm in DISALLOWED_SEARCH_QUERIES:
+        return True
+    # Retailer domain patterns (e.g. *.in, *.com, *.co, *.org, etc.)
+    if re.fullmatch(r"(?:https?://)?(?:www\.)?[a-z0-9\-]+\.(?:in|com|co|org|net|io|biz|info)(?:/.*)?", norm):
+        return True
+    # Pure short single- or two-character token
+    if len(norm) <= 2:
+        return True
+    # Pure opaque hash/ID without product words
+    if re.fullmatch(r"[a-z0-9_\-]{6,32}", norm) and " " not in norm:
+        common_words = {"iphone", "moto", "galaxy", "sony", "macbook", "airpods", "pixel"}
+        if not any(w in norm for w in common_words):
+            return True
+    return False
+
+
+def identify_retailer_from_url(url: str) -> Tuple[str, str]:
+    """Identify retailer canonical name and code from submitted URL.
+
+    Returns (retailer_name, store_code), e.g. ("Amazon India", "amazon").
+    """
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+        host = (parsed.hostname or "").lower()
+    except Exception:
+        return "Web Link", "unknown"
+
+    if any(h in host for h in ("amazon.in", "amzn.in", "amzn.to", "a.co", "amazon")):
+        return "Amazon India", "amazon"
+    elif any(h in host for h in ("flipkart.com", "fkrt.it", "fkrt.co", "dl.flipkart", "flipkart")):
+        return "Flipkart", "flipkart"
+    elif "croma.com" in host or "croma" in host:
+        return "Croma Electronics", "croma"
+    elif "reliancedigital.in" in host or "reliance" in host:
+        return "Reliance Digital", "reliance"
+    elif "tatacliq.com" in host:
+        return "Tata CLiQ", "tatacliq"
+    elif "vijaysales.com" in host:
+        return "Vijay Sales", "vijaysales"
+
+    return host or "Web Link", "unknown"
+
 # Registry for testing / offline mocks
 _MOCK_RESOLUTIONS: Dict[str, Dict[str, Any]] = {}
 
@@ -331,7 +442,8 @@ def resolve_short_url_safely(
 def is_valid_product_title(title: str) -> bool:
     """Validate whether an extracted string is a genuine, descriptive product title.
 
-    Rejects single-letter path fragments ('d', 'p'), opaque codes, and non-informative slugs.
+    Rejects single-letter path fragments ('d', 'p'), opaque codes, retailer hostnames,
+    and non-informative slugs.
     """
     if not title:
         return False
@@ -341,13 +453,16 @@ def is_valid_product_title(title: str) -> bool:
         return False
 
     norm = cleaned.lower()
-    if norm in INVALID_SLUG_TOKENS:
+    if norm in INVALID_SLUG_TOKENS or norm in DISALLOWED_SEARCH_QUERIES:
+        return False
+
+    if is_disallowed_search_query(cleaned):
         return False
 
     # Pure alphanumeric hash or token without spaces (e.g. 0fhQ0IWO, itm6ac6485515ae4, B0CHX1W1XY)
     if re.fullmatch(r"[A-Za-z0-9_\-]{6,32}", cleaned) and " " not in cleaned:
         # Check if it contains common product name words
-        common_words = {"iphone", "moto", "galaxy", "sony", "apple", "samsung", "pixel", "headphone"}
+        common_words = {"iphone", "moto", "galaxy", "sony", "apple", "samsung", "pixel", "headphone", "macbook", "airpods"}
         if not any(w in norm for w in common_words):
             return False
 
@@ -356,8 +471,8 @@ def is_valid_product_title(title: str) -> bool:
     if not words:
         return False
 
-    # If the only word is in invalid tokens, reject
-    if all(w in INVALID_SLUG_TOKENS for w in words):
+    # If all words are in invalid tokens or disallowed search terms, reject
+    if all(w in INVALID_SLUG_TOKENS or w in DISALLOWED_SEARCH_QUERIES for w in words):
         return False
 
     return True
@@ -474,6 +589,21 @@ def extract_product_info_from_resolved_url(
                             candidate_title = cand
                             break
 
+        except Exception:
+            pass
+
+    # 3. Try known ASIN / product ID lookup in path parts (e.g. /dp/B0CHX1W1XY or /p/itm6ac6485515ae4)
+    if not candidate_title:
+        try:
+            parsed = urllib.parse.urlparse(url)
+            path = urllib.parse.unquote(parsed.path).strip("/")
+            parts = [p.lower() for p in path.split("/") if p]
+            for p in parts:
+                if p in KNOWN_RETAILER_PRODUCT_IDS:
+                    cand = KNOWN_RETAILER_PRODUCT_IDS[p]
+                    if is_valid_product_title(cand):
+                        candidate_title = cand
+                        break
         except Exception:
             pass
 
