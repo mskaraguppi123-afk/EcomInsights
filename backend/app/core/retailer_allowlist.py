@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 
 @dataclass
@@ -176,20 +176,140 @@ def extract_destination_url(raw_url: str) -> str:
         return ""
     clean = raw_url.strip()
     try:
-        parsed = urlparse(clean)
-        hostname = (parsed.hostname or "").lower()
-        # Handle Google search/shopping redirect wrappers
-        if "google." in hostname and ("/url" in parsed.path or "/shopping" in parsed.path):
+        current = clean
+        # Unpack up to 3 levels of redirects
+        for _ in range(3):
+            parsed = urlparse(current)
+            hostname = (parsed.hostname or "").lower()
+            if not is_google_domain(hostname) and "google." not in hostname:
+                break
             qs = parse_qs(parsed.query)
-            if "url" in qs and qs["url"]:
-                return unquote(qs["url"][0]).strip()
-            if "q" in qs and qs["q"]:
-                return unquote(qs["q"][0]).strip()
-            if "adurl" in qs and qs["adurl"]:
-                return unquote(qs["adurl"][0]).strip()
+            target = None
+            for param in ("url", "adurl", "q", "target", "dest", "destination", "link"):
+                if param in qs and qs[param]:
+                    val = unquote(qs[param][0]).strip()
+                    if val.startswith("http://") or val.startswith("https://"):
+                        target = val
+                        break
+            if target and target != current:
+                current = target
+            else:
+                break
+        return current
     except Exception:
         pass
     return clean
+
+
+def validate_and_sanitize_retailer_product_url(
+    raw_url: str,
+    store_code: str,
+    active_retailers: Optional[Dict[str, TrustedRetailer]] = None,
+) -> Optional[str]:
+    """Strictly validate that a product URL is an authentic, non-malformed HTTPS link
+    on a verified domain for the given retailer.
+
+    Requirements:
+    - Must be a valid URL starting with 'https://'.
+    - Rejects 'http://', 'javascript:', '#', empty, or malformed URLs (e.g. unencoded spaces).
+    - Unpacks any Google redirect wrappers first.
+    - Destination hostname must match an allowed domain for the specific retailer (e.g. amazon.in, flipkart.com).
+    - Strictly rejects lookalike domains (e.g. amaz0n.in, flipkart-deals.in, fake-amazon.in).
+    - Rejects Google internal search / shopping URLs.
+
+    Returns the clean HTTPS URL if valid, or None if invalid.
+    """
+    if not raw_url or not isinstance(raw_url, str):
+        return None
+    clean = raw_url.strip()
+    if not clean or clean.startswith("#") or clean.startswith("javascript:"):
+        return None
+
+    # Unpack redirect if wrapped in Google redirect
+    dest = extract_destination_url(clean)
+    if not dest or not dest.startswith("https://"):
+        return None
+
+    # Reject malformed URLs containing unencoded whitespace or control characters
+    if any(c.isspace() for c in dest):
+        return None
+
+    try:
+        parsed = urlparse(dest)
+        hostname = (parsed.hostname or "").lower().strip(".")
+        if not hostname:
+            return None
+
+        # Google search and shopping pages are NOT retailer product pages
+        if is_google_domain(hostname):
+            return None
+
+        if active_retailers is None:
+            active_retailers = get_active_trusted_retailers()
+
+        retailer = active_retailers.get(store_code)
+        if not retailer or not retailer.enabled:
+            return None
+
+        # Must match an allowed domain of the specified verified retailer
+        for allowed_domain in retailer.allowed_domains:
+            if is_allowed_domain_match(hostname, allowed_domain):
+                return dest
+
+        return None
+    except Exception:
+        return None
+
+
+def build_product_query_for_search(raw_query: str) -> str:
+    """Normalize a product query for retailer search while strictly preserving
+    brand, model numbers, generations, storage sizes, and variant details.
+
+    E.g.
+    'iPhone 15' -> 'iPhone 15'
+    'Apple iPhone 15 (128 GB) - Black' -> 'Apple iPhone 15 128 GB Black'
+    'Moto G96' -> 'Moto G96'
+    'Motorola Moto G96 5G 256GB' -> 'Motorola Moto G96 5G 256GB'
+    """
+    if not raw_query:
+        return ""
+    q = raw_query.strip()
+    # If a URL was passed, extract product title if possible
+    if q.startswith("http://") or q.startswith("https://"):
+        try:
+            from app.services.link_search import extract_product_title
+            title, is_url, _ = extract_product_title(q)
+            if is_url and title:
+                q = title
+        except Exception:
+            pass
+
+    # Replace punctuation like brackets, parentheses, hyphens, slashes while preserving alphanumeric
+    q = re.sub(r"[()\[\]{},;:*#~`!@$%^&=+_|?<>/\\]+", " ", q)
+    # Normalize multiple whitespace
+    q = re.sub(r"\s+", " ", q).strip()
+    return q
+
+
+def build_retailer_fallback_search_url(store_code: str, query: str) -> Optional[str]:
+    """Build a verified, properly URL-encoded HTTPS search URL for the retailer
+    using the full product query including model and variant."""
+    clean_q = build_product_query_for_search(query)
+    if not clean_q:
+        return None
+    encoded = quote_plus(clean_q)
+
+    search_templates = {
+        "amazon": f"https://www.amazon.in/s?k={encoded}",
+        "flipkart": f"https://www.flipkart.com/search?q={encoded}",
+        "croma": f"https://www.croma.com/search/?text={encoded}",
+        "reliance": f"https://www.reliancedigital.in/search?q={encoded}",
+        "vijaysales": f"https://www.vijaysales.com/search?q={encoded}",
+        "tatacliq": f"https://www.tatacliq.com/search/?searchCategory=all&text={encoded}",
+        "jiomart": f"https://www.jiomart.com/search?q={encoded}",
+        "poorvika": f"https://www.poorvika.com/s?q={encoded}",
+    }
+    return search_templates.get(store_code)
 
 
 def extract_hostname(url: str) -> str:

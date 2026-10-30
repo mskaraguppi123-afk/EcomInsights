@@ -24,6 +24,7 @@ class StoreQuote(BaseModel):
     is_comparable: bool = True
     condition: str = "Brand New"
     price_status: str = "verified"
+    is_direct_url: bool = False
 
 
 class MultiStoreComparisonOut(BaseModel):
@@ -50,10 +51,9 @@ class BaseStoreAdapter(ABC):
         self.emoji = emoji
 
     def get_store_url(self, product_name: str) -> str:
-        from app.services.link_search import build_retailer_search_urls, clean_product_search_term
-        clean_q = clean_product_search_term(product_name)
-        urls = build_retailer_search_urls(clean_q, "")
-        return urls.get(self.store_code, f"https://www.{self.store_code}.com")
+        from app.core.retailer_allowlist import build_retailer_fallback_search_url
+        url = build_retailer_fallback_search_url(self.store_code, product_name)
+        return url or ""
 
     @abstractmethod
     def get_quote(self, product_id: int, product_name: str, base_price: Decimal, currency: str) -> StoreQuote:

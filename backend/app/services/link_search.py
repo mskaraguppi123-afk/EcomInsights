@@ -709,21 +709,33 @@ def clean_product_search_term(title: str) -> str:
     return cleaned if len(cleaned) >= 3 else t
 
 
-def build_retailer_search_urls(clean_term: str, user_input: str) -> dict[str, str]:
-    """Build accurate, active, direct search URLs for each premier Indian retailer."""
-    encoded = quote_plus(clean_term.strip())
-    u_lower = user_input.lower()
+def build_retailer_search_urls(clean_term: str, user_input: str = "") -> dict[str, str]:
+    """Build accurate, active, direct search URLs for each premier Indian retailer.
+    Preserves full product query including model, generation, and variant details."""
+    from app.core.retailer_allowlist import (
+        build_product_query_for_search,
+        build_retailer_fallback_search_url,
+        get_active_trusted_retailers,
+        validate_and_sanitize_retailer_product_url,
+    )
 
-    return {
-        "amazon": user_input if ("amazon." in u_lower) else f"https://www.amazon.in/s?k={encoded}",
-        "flipkart": user_input if ("flipkart." in u_lower) else f"https://www.flipkart.com/search?q={encoded}",
-        "croma": user_input if ("croma." in u_lower) else f"https://www.croma.com/search/?text={encoded}",
-        "reliance": user_input if ("reliancedigital." in u_lower) else f"https://www.reliancedigital.in/search?q={encoded}",
-        "tatacliq": user_input if ("tatacliq." in u_lower) else f"https://www.tatacliq.com/search/?searchCategory=all&text={encoded}",
-        "vijaysales": user_input if ("vijaysales." in u_lower) else f"https://www.vijaysales.com/search?q={encoded}",
-        "jiomart": user_input if ("jiomart." in u_lower) else f"https://www.jiomart.com/search?q={encoded}",
-        "poorvika": user_input if ("poorvika." in u_lower) else f"https://www.poorvika.com/s?q={encoded}",
-    }
+    clean_q = build_product_query_for_search(clean_term or user_input)
+    active_retailers = get_active_trusted_retailers()
+    direct_urls: dict[str, str] = {}
+
+    for code in active_retailers.keys():
+        # If user_input was an authentic direct HTTPS product URL on this specific retailer's verified domain, preserve it
+        if user_input and (user_input.startswith("https://") or user_input.startswith("http://")):
+            valid_user_url = validate_and_sanitize_retailer_product_url(user_input, code, active_retailers)
+            if valid_user_url:
+                direct_urls[code] = valid_user_url
+                continue
+
+        search_url = build_retailer_fallback_search_url(code, clean_q)
+        if search_url:
+            direct_urls[code] = search_url
+
+    return direct_urls
 
 
 def resolve_base_price(title: str, db: Optional[Any] = None) -> Optional[Decimal]:
@@ -839,7 +851,12 @@ def _query_serpapi_shopping(
     try:
         import httpx
         from app.services.search_matcher import match_product, extract_model_identifiers
-        from app.core.retailer_allowlist import get_active_trusted_retailers, extract_destination_url
+        from app.core.retailer_allowlist import (
+            get_active_trusted_retailers,
+            extract_destination_url,
+            validate_and_sanitize_retailer_product_url,
+            build_retailer_fallback_search_url,
+        )
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -876,24 +893,25 @@ def _query_serpapi_shopping(
             for item in items:
                 source = (item.get("source") or "").strip()
                 item_title = (item.get("title") or "").strip()
-                raw_link = item.get("link") or item.get("product_link") or ""
-                product_url = extract_destination_url(raw_link)
+                raw_link = (item.get("link") or "").strip()
+                product_link = (item.get("product_link") or "").strip()
+                destination_candidate = extract_destination_url(raw_link or product_link)
                 if not source or not item_title:
                     continue
 
                 canonical_name, store_code, emoji, priority = identify_retailer(
-                    source, product_url, active_retailers=active_retailers_map
+                    source, destination_candidate, active_retailers=active_retailers_map
                 )
 
                 if store_code in retailer_stats:
                     retailer_stats[store_code]["seen"] += 1
 
                 if not canonical_name or not store_code:
-                    logger.info("[%s] Rejected untrusted/unallowlisted item '%s' from source '%s' (url=%s)", query_label, item_title, source, product_url)
+                    logger.info("[%s] Rejected untrusted/unallowlisted item '%s' from source '%s' (url=%s)", query_label, item_title, source, destination_candidate)
                     continue
 
                 # Filter A: Reject parts, tools (e.g. Baba Tools), carrier offers, accessories, passing mentions
-                is_bad, bad_reason = is_unrelated_or_parts_item(item_title, source, clean_q, link=product_url)
+                is_bad, bad_reason = is_unrelated_or_parts_item(item_title, source, clean_q, link=destination_candidate)
                 if is_bad:
                     retailer_stats[store_code]["accessories"] += 1
                     logger.info("[%s] Rejected accessory/parts item '%s' from %s: %s", query_label, item_title, store_code, bad_reason)
@@ -932,12 +950,22 @@ def _query_serpapi_shopping(
                     logger.info("[%s] Rejected missing variant '%s' from %s: expected %s", query_label, item_title, store_code, q_info["variants"])
                     continue
 
+                # Validate whether a verified direct HTTPS product URL exists for this retailer
+                direct_product_url = validate_and_sanitize_retailer_product_url(
+                    raw_link, store_code, active_retailers=active_retailers_map
+                )
+                if not direct_product_url and product_link:
+                    direct_product_url = validate_and_sanitize_retailer_product_url(
+                        product_link, store_code, active_retailers=active_retailers_map
+                    )
+
                 price_val, item_curr = parse_serpapi_price(item, default_currency=currency)
                 raw_candidates.append({
                     "item": item,
                     "source": source,
                     "title": item_title,
-                    "url": product_url,
+                    "url": direct_product_url or "",
+                    "is_direct_url": bool(direct_product_url),
                     "price_val": price_val,
                     "currency": item_curr,
                     "store_code": store_code,
@@ -1072,7 +1100,14 @@ def _query_serpapi_shopping(
                 spec_tier = extract_spec_tier(item_title, clean_q)
                 condition_val = extract_item_condition(item_title, item)
 
-                effective_url = product_url if product_url else direct_urls.get(store_code, "")
+                is_direct_cand = cand.get("is_direct_url", False)
+                if product_url and is_direct_cand:
+                    effective_url = product_url
+                else:
+                    # Fallback to working retailer search URL using the full product query including model and variant
+                    fallback_url = direct_urls.get(store_code) or build_retailer_fallback_search_url(store_code, clean_q)
+                    effective_url = fallback_url or ""
+                    is_direct_cand = False
 
                 candidate_quote = StoreQuote(
                     store_name=canonical_name,
@@ -1092,6 +1127,7 @@ def _query_serpapi_shopping(
                     is_comparable=True,
                     condition=condition_val,
                     price_status=price_status_val,
+                    is_direct_url=is_direct_cand,
                 )
 
                 if store_code in store_quotes_map:
@@ -1102,6 +1138,12 @@ def _query_serpapi_shopping(
                         existing_quote.price is not None
                         and candidate_quote.price is not None
                         and candidate_quote.price < existing_quote.price
+                    ):
+                        store_quotes_map[store_code] = (candidate_quote, priority)
+                    elif (
+                        not existing_quote.is_direct_url
+                        and candidate_quote.is_direct_url
+                        and (existing_quote.price == candidate_quote.price)
                     ):
                         store_quotes_map[store_code] = (candidate_quote, priority)
                 else:
@@ -1299,8 +1341,7 @@ def _generate_offline_search_quotes(
     """Generate exact same product quotes across premier Indian retailers: Amazon, Flipkart, Croma, Reliance Digital."""
     now_iso = datetime.now(timezone.utc).isoformat()
     base = resolve_base_price(extracted_title, db=db)
-    clean_search_q = clean_product_search_term(extracted_title)
-    store_links = build_retailer_search_urls(clean_search_q, user_input)
+    store_links = build_retailer_search_urls(extracted_title, user_input)
 
     if base is None:
         return UniversalSearchOut(

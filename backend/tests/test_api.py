@@ -1795,6 +1795,156 @@ def test_universal_search_ai_insight_pipeline(client):
     assert "croma" in store_codes or "croma" in data.get("direct_retailer_links", {})
 
 
+def test_retailer_product_url_validation_and_lookalike_rejection():
+    """Verify that only HTTPS links on verified retailer domains are accepted,
+    unpacking Google redirects, and rejecting lookalikes, non-HTTPS, and malformed URLs."""
+    from app.core.retailer_allowlist import (
+        validate_and_sanitize_retailer_product_url,
+        extract_destination_url,
+    )
+
+    # 1. Authentic direct HTTPS Amazon India link
+    amz_valid = "https://www.amazon.in/Apple-iPhone-15-128-GB/dp/B0CHX1W1XY/"
+    assert validate_and_sanitize_retailer_product_url(amz_valid, "amazon") == amz_valid
+
+    # 2. Authentic direct HTTPS Flipkart link
+    fk_valid = "https://www.flipkart.com/apple-iphone-15-black-128-gb/p/itm6ac6485515ae4"
+    assert validate_and_sanitize_retailer_product_url(fk_valid, "flipkart") == fk_valid
+
+    # 3. Google redirect (/aclk or /url) unpacking to Amazon / Flipkart
+    g_aclk = f"https://www.google.com/aclk?sa=l&ai=DChcSEw&adurl={amz_valid}"
+    assert validate_and_sanitize_retailer_product_url(g_aclk, "amazon") == amz_valid
+
+    g_url = f"https://www.google.com/url?url={fk_valid}"
+    assert validate_and_sanitize_retailer_product_url(g_url, "flipkart") == fk_valid
+
+    # 4. Reject Google search / shopping aggregation pages as product URLs
+    g_shop = "https://www.google.co.in/search?ibp=oshop&q=iPhone 15&prds=catalogid:123"
+    assert validate_and_sanitize_retailer_product_url(g_shop, "amazon") is None
+    assert validate_and_sanitize_retailer_product_url(g_shop, "flipkart") is None
+
+    # 5. Reject non-HTTPS links (http://)
+    assert validate_and_sanitize_retailer_product_url("http://www.amazon.in/dp/B0CHX1W1XY", "amazon") is None
+    assert validate_and_sanitize_retailer_product_url("http://www.flipkart.com/item", "flipkart") is None
+
+    # 6. Reject lookalike domains
+    assert validate_and_sanitize_retailer_product_url("https://amaz0n.in/dp/B0CHX1W1XY", "amazon") is None
+    assert validate_and_sanitize_retailer_product_url("https://amazon-deals.in/dp/123", "amazon") is None
+    assert validate_and_sanitize_retailer_product_url("https://flipkart-deals.in/item", "flipkart") is None
+    assert validate_and_sanitize_retailer_product_url("https://fake-amazon.in/item", "amazon") is None
+
+    # 7. Reject empty, '#', javascript:, or malformed URLs with unencoded spaces
+    assert validate_and_sanitize_retailer_product_url("", "amazon") is None
+    assert validate_and_sanitize_retailer_product_url("#", "amazon") is None
+    assert validate_and_sanitize_retailer_product_url("javascript:void(0)", "amazon") is None
+    assert validate_and_sanitize_retailer_product_url("https://www.amazon.in/bad path with spaces", "amazon") is None
+
+
+def test_retailer_fallback_search_url_preserves_full_query_and_variant():
+    """Verify that fallback search URLs preserve brand, model, and variants with proper URL encoding."""
+    from app.core.retailer_allowlist import (
+        build_product_query_for_search,
+        build_retailer_fallback_search_url,
+    )
+
+    # 1. iPhone 15
+    q1 = "iPhone 15"
+    assert build_product_query_for_search(q1) == "iPhone 15"
+    amz_url1 = build_retailer_fallback_search_url("amazon", q1)
+    fk_url1 = build_retailer_fallback_search_url("flipkart", q1)
+    assert amz_url1 == "https://www.amazon.in/s?k=iPhone+15"
+    assert fk_url1 == "https://www.flipkart.com/search?q=iPhone+15"
+
+    # 2. iPhone 15 with storage and color variant
+    q2 = "Apple iPhone 15 (128 GB) - Black"
+    assert "128 GB" in build_product_query_for_search(q2)
+    amz_url2 = build_retailer_fallback_search_url("amazon", q2)
+    assert "128+GB" in amz_url2 or "128+GB" in amz_url2.replace("+", " ")
+    assert amz_url2.startswith("https://www.amazon.in/s?k=")
+
+    # 3. Moto G96
+    q3 = "Moto G96"
+    assert build_product_query_for_search(q3) == "Moto G96"
+    amz_url3 = build_retailer_fallback_search_url("amazon", q3)
+    fk_url3 = build_retailer_fallback_search_url("flipkart", q3)
+    assert amz_url3 == "https://www.amazon.in/s?k=Moto+G96"
+    assert fk_url3 == "https://www.flipkart.com/search?q=Moto+G96"
+
+    # 4. Moto G96 5G 256GB
+    q4 = "Motorola Moto G96 5G 256GB"
+    amz_url4 = build_retailer_fallback_search_url("amazon", q4)
+    fk_url4 = build_retailer_fallback_search_url("flipkart", q4)
+    assert "G96" in amz_url4 and "256GB" in amz_url4
+    assert "G96" in fk_url4 and "256GB" in fk_url4
+    assert not any(c.isspace() for c in amz_url4)
+    assert not any(c.isspace() for c in fk_url4)
+
+    # 5. Unknown retailer returns None (never a made-up URL)
+    assert build_retailer_fallback_search_url("fake_store", "iPhone 15") is None
+
+
+def test_serpapi_direct_product_url_versus_fallback_search_url():
+    """Verify that SerpApi direct product URLs are preserved, whereas Google Shopping
+    internal search URLs fall back to verified retailer search URLs."""
+    from decimal import Decimal
+    from unittest.mock import patch, MagicMock
+    from app.services.link_search import _query_serpapi_shopping
+
+    mock_items = [
+        # Amazon has an authentic direct HTTPS product URL
+        {
+            "position": 1,
+            "title": "Apple iPhone 15 (128 GB)",
+            "source": "Amazon.in",
+            "price": "₹69,900.00",
+            "extracted_price": 69900.0,
+            "link": "https://www.amazon.in/Apple-iPhone-15-128-GB/dp/B0CHX1W1XY",
+            "rating": 4.6,
+        },
+        # Flipkart only has a Google Shopping search aggregation URL
+        {
+            "position": 2,
+            "title": "Apple iPhone 15 (128 GB)",
+            "source": "Flipkart",
+            "price": "₹70,900.00",
+            "extracted_price": 70900.0,
+            "link": None,
+            "product_link": "https://www.google.co.in/search?ibp=oshop&q=iPhone 15&prds=catalogid:123",
+            "rating": 4.5,
+        },
+    ]
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"shopping_results": mock_items}
+
+    with patch("httpx.Client.get", return_value=mock_response):
+        res = _query_serpapi_shopping(
+            user_input="iPhone 15",
+            extracted_title="iPhone 15",
+            is_url=False,
+            source_platform="Keyword Query",
+            api_key="test_api_key",
+            currency="INR",
+            trusted_retailers=["amazon", "flipkart"],
+        )
+
+        assert res is not None
+        amz = next(s for s in res.stores if s.store_code == "amazon")
+        fk = next(s for s in res.stores if s.store_code == "flipkart")
+
+        # Amazon must retain its authentic direct product URL
+        assert amz.is_direct_url is True
+        assert amz.store_url == "https://www.amazon.in/Apple-iPhone-15-128-GB/dp/B0CHX1W1XY"
+
+        # Flipkart must NOT be given the Google Shopping search URL
+        assert fk.is_direct_url is False
+        assert "google.co.in" not in fk.store_url
+        assert fk.store_url == "https://www.flipkart.com/search?q=iPhone+15"
+        assert not any(c.isspace() for c in fk.store_url)
+
+
+
 
 
 

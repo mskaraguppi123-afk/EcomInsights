@@ -925,7 +925,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     <div style="border:${s.is_lowest && comp.is_comparable_comparison && comp.max_savings !== null ? '2px solid #1f7359' : (s.price_status === 'excluded' ? '1px dashed #e57373' : '1px solid #e5eae7')}; background:${s.is_lowest && comp.is_comparable_comparison && comp.max_savings !== null ? '#f7fbf9' : (s.price_status === 'excluded' ? '#fffaf9' : '#fff')}; border-radius:8px; padding:12px; position:relative;">
                       ${s.is_lowest && comp.is_comparable_comparison && comp.max_savings !== null ? '<span style="position:absolute; top:-8px; right:8px; background:#1f7359; color:#fff; font-size:9px; font-weight:800; padding:2px 6px; border-radius:4px; text-transform:uppercase;">Lowest Price</span>' : ''}
                       <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:13px; font-weight:700; color:var(--text); text-decoration:none;" title="Click to visit store directly">${s.store_badge_emoji} ${s.store_name} <span style="font-size:10px; color:#1f7359;">↗</span></a>
+                        ${s.store_url ? `
+                          <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:13px; font-weight:700; color:var(--text); text-decoration:none;" title="Opens in a new tab">${s.store_badge_emoji} ${s.store_name} <span style="font-size:10px; color:#1f7359;">↗</span></a>
+                        ` : `
+                          <span style="font-size:13px; font-weight:700; color:var(--text);">${s.store_badge_emoji} ${s.store_name}</span>
+                        `}
                         <span style="font-size:11px; color:#888;">★ ${s.rating}</span>
                       </div>
                       <div style="display:flex; align-items:center; gap:6px; margin-top:4px; flex-wrap:wrap;">
@@ -941,7 +945,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                       ${s.fetched_at ? `<div style="font-size:10px; color:#88958f; margin-top:2px;">Checked: ${new Date(s.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>` : ''}
                       <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; padding-top:6px; border-top:1px solid #f0f3f1;">
                         ${s.is_lowest && comp.is_comparable_comparison && comp.max_savings !== null ? '<div style="font-size:11px; color:#1f7359; font-weight:700;">✓ Best Deal Selected</div>' : (s.price_status === 'excluded' ? '<div style="font-size:11px; color:#c0392b; font-weight:600;">Excluded outlier</div>' : (s.difference_from_lowest !== null && s.difference_from_lowest !== undefined ? `<div style="font-size:11px; color:#dc3545; font-weight:600;">+₹${parseFloat(s.difference_from_lowest).toFixed(2)} higher</div>` : '<div style="font-size:11px; color:#1f7359; font-weight:600;">Verified listing</div>'))}
-                        <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:11px; color:var(--primary); font-weight:700; text-decoration:none;">Visit Store →</a>
+                        ${s.store_url ? `
+                          <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="display:inline-flex; align-items:center; gap:4px; padding:6px 14px; background:${s.is_direct_url ? '#1f7359' : '#ffffff'}; color:${s.is_direct_url ? '#ffffff' : '#1f7359'}; border:1px solid #1f7359; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; cursor:pointer;" title="Opens in a new tab">
+                            ${s.is_direct_url ? 'Visit Store ↗' : 'Search on ' + s.store_name + ' ↗'}
+                          </a>
+                        ` : `
+                          <span style="display:inline-flex; align-items:center; padding:6px 14px; background:#e2e8e5; color:#77827d; border-radius:6px; font-size:11px; font-weight:600; cursor:not-allowed;" title="Store link unavailable">
+                            Store link unavailable
+                          </span>
+                        `}
                       </div>
                     </div>
                   `).join('')}
@@ -1190,7 +1202,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 <div style="border:${s.is_lowest && data.is_comparable_comparison && data.max_savings !== null ? '2px solid #1f7359' : (s.price_status === 'excluded' ? '1px dashed #e57373' : '1px solid #e5eae7')}; background:${s.is_lowest && data.is_comparable_comparison && data.max_savings !== null ? '#ffffff' : (s.price_status === 'excluded' ? '#fffaf9' : '#fafcfb')}; border-radius:8px; padding:12px; position:relative;">
                   ${s.is_lowest && data.is_comparable_comparison && data.max_savings !== null ? '<span style="position:absolute; top:-8px; right:8px; background:#1f7359; color:#fff; font-size:9px; font-weight:800; padding:2px 6px; border-radius:4px; text-transform:uppercase;">Lowest Price</span>' : ''}
                   <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:13px; font-weight:700; color:var(--text); text-decoration:none;" title="Click to visit store directly">${s.store_badge_emoji} ${s.store_name} <span style="font-size:10px; color:#1f7359;">↗</span></a>
+                    ${s.store_url ? `
+                      <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:13px; font-weight:700; color:var(--text); text-decoration:none;" title="Opens in a new tab">${s.store_badge_emoji} ${s.store_name} <span style="font-size:10px; color:#1f7359;">↗</span></a>
+                    ` : `
+                      <span style="font-size:13px; font-weight:700; color:var(--text);">${s.store_badge_emoji} ${s.store_name}</span>
+                    `}
                     <span style="font-size:11px; color:#888;">★ ${s.rating}</span>
                   </div>
                   <div style="display:flex; align-items:center; gap:6px; margin-top:4px; flex-wrap:wrap;">
@@ -1200,9 +1216,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     ${s.price_status === 'excluded' ? `<span style="font-size:10px; color:#c0392b; font-weight:700;">⚠️ Excluded Outlier</span>` : ''}
                   </div>
                   <div style="font-size:11px; color:var(--primary); font-weight:600; margin:3px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                    <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="color:inherit; text-decoration:none;" title="${s.matched_product_title || data.extracted_title}">
-                      📦 ${s.matched_product_title || data.extracted_title}
-                    </a>
+                    ${s.store_url ? `
+                      <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="color:inherit; text-decoration:none;" title="${s.matched_product_title || data.extracted_title}">
+                        📦 ${s.matched_product_title || data.extracted_title}
+                      </a>
+                    ` : `
+                      <span title="${s.matched_product_title || data.extracted_title}">
+                        📦 ${s.matched_product_title || data.extracted_title}
+                      </span>
+                    `}
                   </div>
                   <div style="font-size:17px; font-weight:800; color:${s.price_status === 'excluded' ? '#c0392b' : (s.is_lowest && data.is_comparable_comparison && data.max_savings !== null ? '#1f7359' : 'var(--text)')}; margin:6px 0 4px;">
                     ${s.price_status === 'excluded' ? 'Price not verified' : (s.price !== null && s.price !== undefined ? (s.currency === 'USD' ? '$' : '₹') + parseFloat(s.price).toFixed(2) : 'Price unavailable')}
@@ -1211,7 +1233,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                   ${s.fetched_at ? `<div style="font-size:10px; color:#88958f; margin-top:2px;">Checked: ${new Date(s.fetched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>` : ''}
                   <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
                     ${s.is_lowest && data.is_comparable_comparison && data.max_savings !== null ? '<span style="font-size:11px; color:#1f7359; font-weight:700;">✓ Best Deal</span>' : (s.price_status === 'excluded' ? '<span style="font-size:11px; color:#c0392b; font-weight:600;">Excluded outlier</span>' : (s.difference_from_lowest !== null && s.difference_from_lowest !== undefined ? `<span style="font-size:11px; color:#dc3545; font-weight:600;">+₹${parseFloat(s.difference_from_lowest).toFixed(2)}</span>` : '<span style="font-size:11px; color:#1f7359; font-weight:600;">Verified listing</span>'))}
-                    <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="font-size:11px; color:var(--primary); font-weight:700; text-decoration:none;">Visit Store →</a>
+                    ${s.store_url ? `
+                      <a href="${s.store_url}" target="_blank" rel="noopener noreferrer" style="display:inline-flex; align-items:center; gap:4px; padding:6px 14px; background:${s.is_direct_url ? '#1f7359' : '#ffffff'}; color:${s.is_direct_url ? '#ffffff' : '#1f7359'}; border:1px solid #1f7359; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; cursor:pointer;" title="Opens in a new tab">
+                        ${s.is_direct_url ? 'Visit Store ↗' : 'Search on ' + s.store_name + ' ↗'}
+                      </a>
+                    ` : `
+                      <span style="display:inline-flex; align-items:center; padding:6px 14px; background:#e2e8e5; color:#77827d; border-radius:6px; font-size:11px; font-weight:600; cursor:not-allowed;" title="Store link unavailable">
+                        Store link unavailable
+                      </span>
+                    `}
                   </div>
                 </div>
               `).join('')}

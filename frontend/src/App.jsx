@@ -983,15 +983,21 @@ export default function App() {
                       </span>
                     )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <a
-                        href={s.store_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ fontSize: '14px', fontWeight: '700', color: '#18231f', textDecoration: 'none' }}
-                        title="Click to visit store directly"
-                      >
-                        {s.store_badge_emoji} {s.store_name} <span style={{ fontSize: '11px', color: '#1f7359' }}>↗</span>
-                      </a>
+                      {s.store_url ? (
+                        <a
+                          href={s.store_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ fontSize: '14px', fontWeight: '700', color: '#18231f', textDecoration: 'none' }}
+                          title="Opens in a new tab"
+                        >
+                          {s.store_badge_emoji} {s.store_name} <span style={{ fontSize: '11px', color: '#1f7359' }}>↗</span>
+                        </a>
+                      ) : (
+                        <span style={{ fontSize: '14px', fontWeight: '700', color: '#18231f' }}>
+                          {s.store_badge_emoji} {s.store_name}
+                        </span>
+                      )}
                       <span style={{ fontSize: '12px', color: '#77827d' }}>★ {s.rating}</span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
@@ -1037,15 +1043,21 @@ export default function App() {
                       )}
                     </div>
                     <div style={{ fontSize: '11px', color: '#1f7359', fontWeight: '600', marginTop: '4px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                      <a
-                        href={s.store_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: 'inherit', textDecoration: 'none' }}
-                        title={s.matched_product_title || universalResult.extracted_title}
-                      >
-                        📦 {s.matched_product_title || universalResult.extracted_title}
-                      </a>
+                      {s.store_url ? (
+                        <a
+                          href={s.store_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: 'inherit', textDecoration: 'none' }}
+                          title={s.matched_product_title || universalResult.extracted_title}
+                        >
+                          📦 {s.matched_product_title || universalResult.extracted_title}
+                        </a>
+                      ) : (
+                        <span title={s.matched_product_title || universalResult.extracted_title}>
+                          📦 {s.matched_product_title || universalResult.extracted_title}
+                        </span>
+                      )}
                     </div>
                     <div
                       style={{
@@ -1081,14 +1093,47 @@ export default function App() {
                       ) : (
                         <span style={{ fontSize: '11px', color: '#1f7359', fontWeight: '600' }}>Verified listing</span>
                       )}
-                      <a
-                        href={s.store_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ fontSize: '12px', color: '#1f7359', fontWeight: '700', textDecoration: 'none' }}
-                      >
-                        Visit Store →
-                      </a>
+                      {s.store_url ? (
+                        <a
+                          href={s.store_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '6px 14px',
+                            borderRadius: '6px',
+                            fontSize: '11px',
+                            fontWeight: '700',
+                            textDecoration: 'none',
+                            cursor: 'pointer',
+                            background: s.is_direct_url ? '#1f7359' : '#ffffff',
+                            color: s.is_direct_url ? '#ffffff' : '#1f7359',
+                            border: '1px solid #1f7359',
+                          }}
+                          title="Opens in a new tab"
+                        >
+                          {s.is_direct_url ? 'Visit Store ↗' : `Search on ${s.store_name} ↗`}
+                        </a>
+                      ) : (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            padding: '6px 14px',
+                            borderRadius: '6px',
+                            fontSize: '11px',
+                            fontWeight: '600',
+                            background: '#e2e8e5',
+                            color: '#77827d',
+                            cursor: 'not-allowed',
+                          }}
+                          title="Store link unavailable"
+                        >
+                          Store link unavailable
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1458,15 +1503,21 @@ export default function App() {
                         </span>
                       )}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <a
-                          href={s.store_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ fontSize: '13px', fontWeight: '700', color: '#192620', textDecoration: 'none' }}
-                          title="Click to visit store directly"
-                        >
-                          {s.store_badge_emoji} {s.store_name} <span style={{ fontSize: '10px', color: '#1f7359' }}>↗</span>
-                        </a>
+                        {s.store_url ? (
+                          <a
+                            href={s.store_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize: '13px', fontWeight: '700', color: '#192620', textDecoration: 'none' }}
+                            title="Opens in a new tab"
+                          >
+                            {s.store_badge_emoji} {s.store_name} <span style={{ fontSize: '10px', color: '#1f7359' }}>↗</span>
+                          </a>
+                        ) : (
+                          <span style={{ fontSize: '13px', fontWeight: '700', color: '#192620' }}>
+                            {s.store_badge_emoji} {s.store_name}
+                          </span>
+                        )}
                         <span style={{ fontSize: '11px', color: '#888' }}>★ {s.rating}</span>
                       </div>
                       <div style={{ fontSize: '17px', fontWeight: '800', color: s.is_lowest ? '#1f7359' : '#192620', margin: '6px 0 4px' }}>
@@ -1488,14 +1539,47 @@ export default function App() {
                             +₹{parseFloat(s.difference_from_lowest).toFixed(2)}
                           </span>
                         )}
-                        <a
-                          href={s.store_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ fontSize: '11px', color: '#1f7359', fontWeight: '700', textDecoration: 'none' }}
-                        >
-                          Visit Store →
-                        </a>
+                        {s.store_url ? (
+                          <a
+                            href={s.store_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '6px 14px',
+                              borderRadius: '6px',
+                              fontSize: '11px',
+                              fontWeight: '700',
+                              textDecoration: 'none',
+                              cursor: 'pointer',
+                              background: s.is_direct_url ? '#1f7359' : '#ffffff',
+                              color: s.is_direct_url ? '#ffffff' : '#1f7359',
+                              border: '1px solid #1f7359',
+                            }}
+                            title="Opens in a new tab"
+                          >
+                            {s.is_direct_url ? 'Visit Store ↗' : `Search on ${s.store_name} ↗`}
+                          </a>
+                        ) : (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              padding: '6px 14px',
+                              borderRadius: '6px',
+                              fontSize: '11px',
+                              fontWeight: '600',
+                              background: '#e2e8e5',
+                              color: '#77827d',
+                              cursor: 'not-allowed',
+                            }}
+                            title="Store link unavailable"
+                          >
+                            Store link unavailable
+                          </span>
+                        )}
                       </div>
                     </div>
                   ))}
