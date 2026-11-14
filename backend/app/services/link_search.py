@@ -337,6 +337,24 @@ def extract_product_title(user_input: str) -> ExtractedTitleResult:
                 variant=cand_variant,
             )
 
+        # If title could not be extracted from HTML (e.g. Amazon bot challenge on /dp/ASIN),
+        # leverage Apify cloud crawler if configured:
+        try:
+            from app.services.apify_scraper import apify_service
+            if apify_service.is_configured:
+                apify_scrape = apify_service.scrape(final_url, max_items=1, save_to_db=False)
+                if apify_scrape and apify_scrape.quotes:
+                    cand_title = apify_scrape.quotes[0].title
+                    dest_retailer, _ = identify_retailer_from_url(final_url)
+                    return ExtractedTitleResult(
+                        cand_title,
+                        True,
+                        dest_retailer if dest_retailer != "Web Link" else retailer_name,
+                        resolved_url=final_url,
+                    )
+        except Exception as e:
+            logger.debug("Failed to extract title via Apify in link_search: %s", e)
+
     # 4. If product title cannot be extracted reliably (e.g. homepage, search page, unknown ID):
     # NEVER return retailer domain or path fragment like 'amazon.in' or 'dp'
     return ExtractedTitleResult(

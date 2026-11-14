@@ -79,10 +79,16 @@ Open <http://localhost:5173> in your browser.
    - Restricts search results strictly to allowlisted, verified retailers (starts with Amazon India and Flipkart for India).
    - Verifies retailer identity from actual URL/domain, rejecting lookalike typos (`amaz0n.in`), prefix scams (`flipkart-deals.in`), and unknown shops.
    - For configuration details, see [TRUSTED_RETAILERS.md](./docs/TRUSTED_RETAILERS.md).
+6. **Apify Web Scraper & Actor Integration:**
+   - Real-time cloud scraping across Amazon listings using Apify Actors (e.g. `junglee/amazon-crawler`).
+   - Seamless offline fallback simulation mode when running without an API key or offline during presentations.
+   - Dedicated CLI scraper tool (`backend/app/scripts/scrape_apify.py`) and UI **Live Scrape (Apify)** button.
+   - For full setup and MCP instructions, see [APIFY_SCRAPER_GUIDE.md](./docs/APIFY_SCRAPER_GUIDE.md).
 
 ## Viva Defense Guide & Project Documentation
 
 For viva preparation, architecture diagrams, mathematical equations, and the top 15 examiner questions with answers, see:
 - [VIVA_DEFENSE_REPORT.md](./VIVA_DEFENSE_REPORT.md)
 - [TRUSTED_RETAILERS.md](./docs/TRUSTED_RETAILERS.md)
+- [APIFY_SCRAPER_GUIDE.md](./docs/APIFY_SCRAPER_GUIDE.md)
 

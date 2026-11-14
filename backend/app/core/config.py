@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     serpapi_api_key: str | None = None
     trusted_retailers: str = "amazon,flipkart,croma,reliance,vijaysales,tatacliq,jiomart,poorvika"
+    apify_api_token: str | None = None
+    apify_amazon_actor: str = "junglee/amazon-crawler"
+    apify_flipkart_actor: str = "scrapesage/flipkart-scraper"
+    apify_timeout_secs: int = 60
 
     model_config = SettingsConfigDict(env_file=("../.env", ".env"), extra="ignore")
 

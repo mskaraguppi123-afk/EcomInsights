@@ -24,6 +24,7 @@ except ModuleNotFoundError:
 
 from app.services.vendor_adapters import MultiStoreComparisonOut, arbitrage_engine
 from app.services.link_search import UniversalSearchOut, search_and_compare_product
+from app.services.apify_scraper import ApifyScrapeResult, apify_service
 from app.schemas.health import HealthResponse
 
 from app.schemas.product import (
@@ -557,6 +558,41 @@ def quick_add_product(
     db.commit()
 
     return get_product(product_id=prod.id, db=db)
+
+
+class ApifyScrapeRequest(SchemaBaseModel):
+    query: str
+    store: str = "both"
+    country: str = "IN"
+    max_items: int = 5
+    save_to_db: bool = True
+
+
+@router.get("/apify/status", tags=["apify", "scraping"])
+def get_apify_status() -> dict:
+    """Check connectivity to the Apify cloud platform and verify API token validity."""
+    return apify_service.test_connection()
+
+
+@router.post(
+    "/apify/scrape",
+    response_model=ApifyScrapeResult,
+    tags=["apify", "scraping"],
+)
+def run_apify_scrape(
+    payload: ApifyScrapeRequest,
+    db: Session = Depends(get_db),
+) -> ApifyScrapeResult:
+    """Execute Apify crawler for real e-commerce listings and prices, and update database catalog."""
+    return apify_service.scrape(
+        query_or_url=payload.query,
+        store=payload.store,
+        country=payload.country,
+        max_items=payload.max_items,
+        save_to_db=payload.save_to_db,
+        db=db,
+    )
+
 
 
 

@@ -194,7 +194,10 @@ export default function App() {
   const [universalQuery, setUniversalQuery] = useState('')
   const [isSearchingUniversal, setIsSearchingUniversal] = useState(false)
   const [universalResult, setUniversalResult] = useState(null)
-
+  const [isScrapingApify, setIsScrapingApify] = useState(false)
+  const [apifyResult, setApifyResult] = useState(null)
+  const [apifyStatus, setApifyStatus] = useState(null)
+  const [apifyStoreTarget, setApifyStoreTarget] = useState('both')
 
   const fetchHealth = () => {
     fetch('/api/v1/health')
@@ -204,6 +207,13 @@ export default function App() {
       })
       .then((data) => setApiStatus(`${data.app} is ${data.status}`))
       .catch(() => setApiStatus('API not connected yet'))
+  }
+
+  const fetchApifyStatus = () => {
+    fetch('/api/v1/apify/status')
+      .then((res) => res.json())
+      .then((data) => setApifyStatus(data))
+      .catch(() => setApifyStatus({ configured: false, connected: false }))
   }
 
   const fetchProducts = () => {
@@ -219,6 +229,7 @@ export default function App() {
   useEffect(() => {
     fetchHealth()
     fetchProducts()
+    fetchApifyStatus()
   }, [])
 
   const handleSelectProduct = (id) => {
@@ -357,6 +368,40 @@ export default function App() {
       .finally(() => setIsSearchingUniversal(false))
   }
 
+  const handleApifyScrape = () => {
+    const q = universalQuery.trim()
+    if (!q) {
+      setToastMsg('Please enter a product name or paste an Amazon/e-commerce link')
+      setTimeout(() => setToastMsg(''), 3000)
+      return
+    }
+
+    setIsScrapingApify(true)
+    fetch('/api/v1/apify/scrape', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q, store: apifyStoreTarget, save_to_db: true }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Apify scrape failed')
+        return res.json()
+      })
+      .then((data) => {
+        setApifyResult(data)
+        setUniversalResult(null)
+        if (data.tracked_product_id) {
+          fetchProducts()
+          setToastMsg(`✓ Apify crawler saved price observation for "${data.quotes?.[0]?.title || q}"!`)
+          setTimeout(() => setToastMsg(''), 4500)
+        }
+      })
+      .catch(() => {
+        setToastMsg('Error running Apify scraper')
+        setTimeout(() => setToastMsg(''), 3000)
+      })
+      .finally(() => setIsScrapingApify(false))
+  }
+
   const handleTrackUniversalProduct = () => {
     if (!universalResult) return
     fetch('/api/v1/products/quick-add', {
@@ -469,37 +514,104 @@ export default function App() {
             <span style={{ fontSize: '10px', background: '#d4edd9', color: '#155724', padding: '3px 10px', borderRadius: '12px', fontWeight: '700' }}>
               Paste URL or Keyword
             </span>
+            <span
+              style={{
+                fontSize: '10px',
+                background: apifyStatus?.connected ? '#dcfce7' : '#fef3c7',
+                color: apifyStatus?.connected ? '#15803d' : '#92400e',
+                border: `1px solid ${apifyStatus?.connected ? '#86efac' : '#fde68a'}`,
+                padding: '3px 10px',
+                borderRadius: '12px',
+                fontWeight: '700',
+              }}
+              title={apifyStatus?.message || 'Apify crawler integration'}
+            >
+              {apifyStatus?.connected ? '🕷️ Apify Cloud: Active' : '🕷️ Apify: Simulation Mode'}
+            </span>
           </div>
           <span style={{ fontSize: '12px', color: '#77827d' }}>
             Real-time multi-store price comparison across Amazon, Flipkart, Croma & more
           </span>
         </div>
 
-        <form onSubmit={handleUniversalSearch} style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-          <input
-            id="universalSearchInput"
-            type="text"
-            placeholder="Paste Amazon / Flipkart / Croma product link or type product (e.g. iPhone 15, Sony WH-1000XM4)…"
-            value={universalQuery}
-            onChange={(e) => setUniversalQuery(e.target.value)}
-            style={{
-              flex: 1,
-              minWidth: '280px',
-              padding: '12px 16px',
-              borderRadius: '8px',
-              border: '1px solid #c9d5cf',
-              fontSize: '14px',
-              outline: 'none',
-            }}
-          />
-          <button
-            type="submit"
-            className="primary-button"
-            disabled={isSearchingUniversal}
-            style={{ opacity: 1, cursor: 'pointer', padding: '12px 22px', fontSize: '14px' }}
-          >
-            {isSearchingUniversal ? '⏳ Searching Stores…' : '🔍 Compare Across Stores'}
-          </button>
+        <form onSubmit={handleUniversalSearch} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+            <input
+              id="universalSearchInput"
+              type="text"
+              placeholder="Paste Amazon / Flipkart / Croma product link or type product (e.g. iPhone 15, Sony WH-1000XM4)…"
+              value={universalQuery}
+              onChange={(e) => setUniversalQuery(e.target.value)}
+              style={{
+                flex: 1,
+                minWidth: '280px',
+                padding: '12px 16px',
+                borderRadius: '8px',
+                border: '1px solid #c9d5cf',
+                fontSize: '14px',
+                outline: 'none',
+              }}
+            />
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={isSearchingUniversal || isScrapingApify}
+              style={{ opacity: 1, cursor: 'pointer', padding: '12px 20px', fontSize: '14px' }}
+            >
+              {isSearchingUniversal ? '⏳ Searching Stores…' : '🔍 Compare Across Stores'}
+            </button>
+            <button
+              type="button"
+              onClick={handleApifyScrape}
+              disabled={isSearchingUniversal || isScrapingApify}
+              style={{
+                padding: '12px 18px',
+                borderRadius: '8px',
+                border: '1px solid #1f7359',
+                background: '#eef8f3',
+                color: '#1f7359',
+                fontWeight: '700',
+                fontSize: '14px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+              title="Scrape live listings from Amazon and Flipkart using Apify Actors"
+            >
+              {isScrapingApify ? '⏳ Scraping Apify Cloud…' : '🕷️ Live Scrape (Apify)'}
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', fontSize: '12px', color: '#4b5563' }}>
+            <span style={{ fontWeight: '700' }}>Crawler Target:</span>
+            {[
+              { id: 'both', label: '🏬 Both Amazon & Flipkart' },
+              { id: 'amazon', label: '🛒 Amazon India' },
+              { id: 'flipkart', label: '🛍️ Flipkart' },
+            ].map((st) => (
+              <button
+                key={st.id}
+                type="button"
+                onClick={() => setApifyStoreTarget(st.id)}
+                style={{
+                  padding: '4px 12px',
+                  borderRadius: '14px',
+                  border: apifyStoreTarget === st.id ? '2px solid #1f7359' : '1px solid #d1d5db',
+                  background: apifyStoreTarget === st.id ? '#eef8f3' : '#ffffff',
+                  color: apifyStoreTarget === st.id ? '#1f7359' : '#4b5563',
+                  fontWeight: apifyStoreTarget === st.id ? '700' : '500',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                }}
+              >
+                {st.label}
+              </button>
+            ))}
+            <span style={{ color: '#9ca3af', marginLeft: 'auto', fontSize: '11px' }}>
+              💡 Compares Amazon & Flipkart side-by-side with real-time price arbitrage
+            </span>
+          </div>
         </form>
 
         {universalResult && (
@@ -1175,6 +1287,244 @@ export default function App() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {apifyResult && (
+          <div style={{ marginTop: '20px', background: '#f7fbf9', border: '1px solid #cce2d6', borderRadius: '12px', padding: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                  <span style={{ fontSize: '11px', fontWeight: '800', color: '#1f7359', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+                    🕷️ Apify Crawler Results
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      fontWeight: '700',
+                      padding: '2px 8px',
+                      borderRadius: '10px',
+                      background: apifyResult.is_live ? '#dcfce7' : '#fef3c7',
+                      color: apifyResult.is_live ? '#15803d' : '#92400e',
+                      border: `1px solid ${apifyResult.is_live ? '#86efac' : '#fde68a'}`,
+                    }}
+                  >
+                    {apifyResult.data_source}
+                  </span>
+                </div>
+                <h3 style={{ fontSize: '18px', fontWeight: '800', margin: '4px 0 3px', color: '#18231f' }}>
+                  {apifyResult.quotes?.[0]?.title || apifyResult.query}
+                </h3>
+                <span style={{ fontSize: '12px', color: '#77827d' }}>
+                  Target: {apifyResult.target_store?.toUpperCase()} · Query: &quot;{apifyResult.query}&quot;
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                {apifyResult.tracked_product_id && (
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: '700',
+                      padding: '4px 12px',
+                      borderRadius: '14px',
+                      background: '#d4edd9',
+                      color: '#155724',
+                      border: '1px solid #c3e6cb',
+                    }}
+                  >
+                    ✓ Tracked in DB (ID: {apifyResult.tracked_product_id})
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setApifyResult(null)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '16px',
+                    color: '#88958f',
+                    cursor: 'pointer',
+                    padding: '2px 6px',
+                  }}
+                  title="Close results"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {apifyResult.message && (
+              <div
+                style={{
+                  background: apifyResult.is_live ? '#f0fdf4' : '#fffbeb',
+                  border: `1px solid ${apifyResult.is_live ? '#bbf7d0' : '#fde68a'}`,
+                  borderRadius: '8px',
+                  padding: '10px 14px',
+                  marginBottom: '16px',
+                  fontSize: '12px',
+                  color: apifyResult.is_live ? '#166534' : '#92400e',
+                }}
+              >
+                ℹ️ {apifyResult.message}
+              </div>
+            )}
+
+            {apifyResult.recommendation_summary && (
+              <div
+                style={{
+                  background: '#f0fdf4',
+                  border: '1px solid #bbf7d0',
+                  borderRadius: '10px',
+                  padding: '12px 18px',
+                  marginBottom: '16px',
+                  fontSize: '13px',
+                  fontWeight: '700',
+                  color: '#166534',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                }}
+              >
+                <span style={{ fontSize: '18px' }}>⚖️</span>
+                <span>{apifyResult.recommendation_summary}</span>
+              </div>
+            )}
+
+            {apifyResult.lowest_price && (
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  background: '#ffffff',
+                  border: '1px solid #cce2d6',
+                  borderRadius: '10px',
+                  padding: '14px 18px',
+                  marginBottom: '16px',
+                  flexWrap: 'wrap',
+                  gap: '12px',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase' }}>
+                    Cheapest Listing
+                  </div>
+                  <div style={{ fontSize: '22px', fontWeight: '800', color: '#1f7359' }}>
+                    ₹{parseFloat(apifyResult.lowest_price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#77827d' }}>
+                    Found at {apifyResult.cheapest_store}
+                  </div>
+                </div>
+                {apifyResult.max_savings && parseFloat(apifyResult.max_savings) > 0 && (
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase' }}>
+                      Arbitrage Savings
+                    </div>
+                    <div style={{ fontSize: '18px', fontWeight: '800', color: '#0f766e' }}>
+                      Save ₹{parseFloat(apifyResult.max_savings).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#16a34a', fontWeight: '700' }}>
+                      {apifyResult.savings_percentage}% price difference across listings
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '14px' }}>
+              {apifyResult.quotes.map((q, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    background: '#ffffff',
+                    border: q.is_lowest ? '2px solid #1f7359' : '1px solid #dce4e0',
+                    borderRadius: '10px',
+                    padding: '16px',
+                    position: 'relative',
+                    boxShadow: q.is_lowest ? '0 4px 12px rgba(31, 115, 89, 0.12)' : 'none',
+                  }}
+                >
+                  {q.is_lowest && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: '-9px',
+                        right: '12px',
+                        background: '#1f7359',
+                        color: '#fff',
+                        fontSize: '9px',
+                        fontWeight: '800',
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      Lowest Price
+                    </span>
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                    <span
+                      style={{
+                        fontSize: '12px',
+                        fontWeight: '700',
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        background: q.store_code === 'flipkart' ? '#eff6ff' : '#fff7ed',
+                        color: q.store_code === 'flipkart' ? '#1d4ed8' : '#c2410c',
+                        border: `1px solid ${q.store_code === 'flipkart' ? '#bfdbfe' : '#fed7aa'}`,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                    >
+                      {q.store_badge_emoji} {q.store_name}
+                    </span>
+                    <span style={{ fontSize: '12px', color: '#77827d', fontWeight: '600' }}>
+                      ★ {q.rating} {q.reviews_count ? `(${q.reviews_count})` : ''}
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: '12px', color: '#4a5568', margin: '6px 0', lineHeight: '1.4' }}>
+                    {q.title}
+                  </div>
+
+                  <div style={{ fontSize: '20px', fontWeight: '800', color: q.is_lowest ? '#1f7359' : '#18231f', margin: '8px 0 4px' }}>
+                    ₹{parseFloat(q.price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+
+                  <div style={{ fontSize: '11px', color: '#77827d', marginBottom: '12px' }}>
+                    🚚 {q.delivery_info} · {q.in_stock ? '🟢 In Stock' : '🔴 Out of Stock'}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '11px', fontWeight: '700', color: q.is_lowest ? '#1f7359' : '#dc3545' }}>
+                      {q.is_lowest ? '✓ Best Offer' : `+₹${parseFloat(q.difference_from_lowest || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                    </span>
+                    <a
+                      href={q.store_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        textDecoration: 'none',
+                        background: q.is_lowest ? '#1f7359' : '#ffffff',
+                        color: q.is_lowest ? '#ffffff' : '#1f7359',
+                        border: '1px solid #1f7359',
+                      }}
+                    >
+                      Visit Product ↗
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </section>
