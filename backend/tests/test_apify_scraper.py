@@ -122,3 +122,18 @@ def test_apify_api_endpoints(db_session):
     assert res.lowest_price is not None
     assert res.cheapest_store is not None
     assert res.tracked_product_id is not None
+
+
+def test_mcp_info_and_tools():
+    from app.api.routes import get_mcp_info
+    from app.mcp.server import create_mcp_server
+
+    info = get_mcp_info()
+    assert isinstance(info, dict)
+    assert info["server_name"] == "ecominsights-crawler-mcp"
+    assert len(info["tools"]) >= 4
+
+    server = create_mcp_server()
+    assert server is not None
+    assert server.name == "ecominsights-crawler-mcp"
+

@@ -85,10 +85,26 @@ Open <http://localhost:5173> in your browser.
    - Dedicated CLI scraper tool (`backend/app/scripts/scrape_apify.py`) and UI **Live Scrape (Apify)** button.
    - For full setup and MCP instructions, see [APIFY_SCRAPER_GUIDE.md](./docs/APIFY_SCRAPER_GUIDE.md).
 
+8. **Dual Amazon & Flipkart Real-Time Crawlers & Arbitrage:**
+   - Real-time cloud scraping across **Amazon India** (`junglee/amazon-crawler`) and **Flipkart** (`scrapesage/flipkart-scraper`).
+   - Automated mobile shortlink dereferencing (`amzn.in/d/...`, `dl.flipkart.com/...`) into canonical product pages with ASIN/PID extraction.
+   - Head-to-head cross-store comparison calculating arbitrage savings and recommending the winning store.
+9. **Model Context Protocol (MCP) Server Integration:**
+   - Dedicated MCP server module ([backend/app/mcp/server.py](./backend/app/mcp/server.py)) exposing e-commerce crawlers as standardized AI tools.
+   - Connectable with Claude Desktop, Cursor, and any MCP client via stdio JSON-RPC.
+   - For configuration and usage instructions, see [MCP_SERVER_GUIDE.md](./docs/MCP_SERVER_GUIDE.md).
+
+## Quick Launch Scripts (Windows)
+
+- **Run Entire App (Backend + Frontend):** Double-click `start-all.bat` or run `.\start-all.ps1`.
+- **Run MCP Server:** Double-click `start-mcp.bat` or run `python run_mcp_server.py`.
+- **Upload to GitHub:** Double-click `push-to-github.bat`.
+
 ## Viva Defense Guide & Project Documentation
 
 For viva preparation, architecture diagrams, mathematical equations, and the top 15 examiner questions with answers, see:
 - [VIVA_DEFENSE_REPORT.md](./VIVA_DEFENSE_REPORT.md)
-- [TRUSTED_RETAILERS.md](./docs/TRUSTED_RETAILERS.md)
+- [MCP_SERVER_GUIDE.md](./docs/MCP_SERVER_GUIDE.md)
 - [APIFY_SCRAPER_GUIDE.md](./docs/APIFY_SCRAPER_GUIDE.md)
+- [TRUSTED_RETAILERS.md](./docs/TRUSTED_RETAILERS.md)
 

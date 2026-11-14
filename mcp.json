@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/mcp.json",
+  "mcpServers": {
+    "ecominsights-crawlers": {
+      "command": "python",
+      "args": ["run_mcp_server.py"],
+      "description": "EcomInsights MCP Server providing live Amazon & Flipkart web scraping tools with cross-store arbitrage."
+    }
+  }
+}

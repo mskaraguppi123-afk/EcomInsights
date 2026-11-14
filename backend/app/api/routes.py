@@ -594,5 +594,51 @@ def run_apify_scrape(
     )
 
 
+@router.get("/mcp/info", tags=["mcp", "scraping"])
+def get_mcp_info() -> dict:
+    """Retrieve metadata and tool definitions for the Model Context Protocol (MCP) crawler server."""
+    status = apify_service.test_connection()
+    return {
+        "server_name": "ecominsights-crawler-mcp",
+        "version": "1.0.0",
+        "protocol": "Model Context Protocol (MCP) 2024-11-05",
+        "transport": "stdio / JSON-RPC 2.0",
+        "apify_connection": status,
+        "configured_crawlers": {
+            "amazon": settings.apify_amazon_actor,
+            "flipkart": settings.apify_flipkart_actor,
+        },
+        "tools": [
+            {
+                "name": "compare_amazon_and_flipkart",
+                "description": "Crawl Amazon India & Flipkart simultaneously and calculate cross-store arbitrage savings.",
+                "parameters": ["query_or_url", "country", "max_items"],
+            },
+            {
+                "name": "scrape_amazon",
+                "description": "Extract live listings and prices from Amazon India using Apify crawler.",
+                "parameters": ["query_or_url", "country", "max_items"],
+            },
+            {
+                "name": "scrape_flipkart",
+                "description": "Extract live listings and prices from Flipkart using Apify crawler.",
+                "parameters": ["query_or_url", "max_items"],
+            },
+            {
+                "name": "resolve_shortlink",
+                "description": "Dereference shortened mobile retailer links (amzn.in/d/...) to full canonical URLs.",
+                "parameters": ["url"],
+            },
+            {
+                "name": "get_crawler_status",
+                "description": "Verify Apify token and test cloud actor connectivity.",
+                "parameters": [],
+            },
+        ],
+        "launch_command": "python run_mcp_server.py",
+    }
+
+
+
 
 

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "ecominsights": {
+      "command": "python",
+      "args": [
+        "c:\\Users\\MANJUNATH\\Documents\\Codex\\2026-10-03\\referenced-chatgpt-conversation-this-is-an\\outputs\\EcomInsights\\run_mcp_server.py"
+      ],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
