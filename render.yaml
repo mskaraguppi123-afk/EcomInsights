@@ -10,5 +10,11 @@ services:
         value: production
       - key: DATABASE_URL
         value: sqlite:///./ecominsights.db
+      - key: APIFY_API_TOKEN
+        value: apify_api_ZrM2JpuYga2qej4jD7P4LUUxhQFu6y1YsGm3
+      - key: APIFY_AMAZON_ACTOR
+        value: junglee/amazon-crawler
+      - key: APIFY_FLIPKART_ACTOR
+        value: scrapesage/flipkart-scraper
       - key: SERPAPI_API_KEY
         sync: false

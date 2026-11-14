@@ -413,7 +413,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       </a>
       <div class="badges">
         <span class="badge badge-viva">Major Project · Prototype</span>
-        <span class="badge badge-sample">Synthetic Data Only</span>
+        <span class="badge" id="apifyBadge" style="background:#dcfce7; color:#15803d; border:1px solid #86efac; font-size:11px; font-weight:700; padding:5px 12px; border-radius:20px;">
+          🕷️ Apify Cloud: Active
+        </span>
+        <span class="badge" id="mcpBadge" style="background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; font-size:11px; font-weight:700; padding:5px 12px; border-radius:20px;">
+          🤖 MCP Server: 5 Tools Ready
+        </span>
         <div class="api-status">
           <span class="status-dot"></span>
           <span id="apiStatusText">Connected to FastAPI</span>
@@ -423,24 +428,51 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
     <section class="hero">
       <h1>Track & Analyze <span>Product Price Trends</span></h1>
-      <p>A college engineering workspace demonstrating relational price tracking, REST APIs, and historical observations using synthetic benchmark data.</p>
+      <p>Real-time cross-store price comparison and arbitrage across Amazon India & Flipkart using live Apify crawlers and Model Context Protocol (MCP).</p>
     </section>
 
     <!-- Link & Product Universal Search Card -->
-    <div style="background:#ffffff; border:1px solid #cce2d6; border-radius:12px; padding:18px 20px; margin-bottom:24px; box-shadow:0 4px 16px rgba(0,0,0,0.04);">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+    <div style="background:#ffffff; border:1px solid #cce2d6; border-radius:12px; padding:20px 24px; margin-bottom:24px; box-shadow:0 4px 16px rgba(0,0,0,0.04);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
         <div style="display:flex; align-items:center; gap:8px;">
-          <span style="font-size:14px; font-weight:800; color:var(--primary);">🔗 Link-Based & Universal Search</span>
-          <span style="font-size:10px; background:#d4edd9; color:#155724; padding:2px 8px; border-radius:10px; font-weight:700;">Amazon / Flipkart Link or Keyword</span>
+          <span style="font-size:15px; font-weight:800; color:var(--primary);">🔗 Live Crawler & Multi-Store Search</span>
+          <span style="font-size:11px; background:#d4edd9; color:#155724; padding:3px 10px; border-radius:12px; font-weight:700;">Amazon & Flipkart</span>
+          <span id="apifyCardBadge" style="font-size:11px; background:#dcfce7; color:#15803d; border:1px solid #86efac; padding:3px 10px; border-radius:12px; font-weight:700;">
+            🕷️ Apify Cloud: Active
+          </span>
         </div>
-        <span style="font-size:11px; color:var(--text-muted);">Real-time cross-store arbitrage finder</span>
+        <span style="font-size:12px; color:var(--text-muted);">Real-time multi-store scraping & head-to-head price arbitrage</span>
       </div>
-      <div style="display:flex; gap:10px;">
-        <input type="text" id="universalSearchInput" placeholder="Paste Amazon/Flipkart product link or type product (e.g. iPhone 15, Sony WH-1000XM4)..." style="flex:1; padding:12px 16px; border:1px solid #d5ddd8; border-radius:8px; font-size:14px; outline:none;" />
-        <button type="button" id="btnUniversalSearch" class="btn btn-primary" style="padding:12px 22px; font-size:13px; font-weight:700;">
+
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+        <input type="text" id="universalSearchInput" placeholder="Paste Amazon / Flipkart product link or type product (e.g. boAt Rockerz 480, iPhone 16, Sony WH-1000XM5)..." style="flex:1; min-width:280px; padding:12px 16px; border:1px solid #c9d5cf; border-radius:8px; font-size:14px; outline:none;" />
+        <button type="button" id="btnApifyScrape" class="btn btn-primary" style="padding:12px 20px; font-size:13px; font-weight:700; background:#1f7359; color:#ffffff; border:none; display:flex; align-items:center; gap:6px; cursor:pointer;">
+          <span>🕷️</span> Live Scrape (Apify)
+        </button>
+        <button type="button" id="btnUniversalSearch" class="btn btn-secondary" style="padding:12px 18px; font-size:13px; font-weight:700; cursor:pointer;">
           <span>🔍</span> Compare Across Stores
         </button>
       </div>
+
+      <!-- Crawler Store Target Selector -->
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:#4b5563; padding-top:4px;">
+        <span style="font-weight:700;">Crawler Target:</span>
+        <button type="button" class="store-target-btn active" data-store="both" style="padding:4px 12px; border-radius:14px; border:2px solid #1f7359; background:#eef8f3; color:#1f7359; font-weight:700; cursor:pointer; font-size:12px;">
+          🏬 Both Amazon & Flipkart
+        </button>
+        <button type="button" class="store-target-btn" data-store="amazon" style="padding:4px 12px; border-radius:14px; border:1px solid #d1d5db; background:#ffffff; color:#4b5563; font-weight:500; cursor:pointer; font-size:12px;">
+          🛒 Amazon India
+        </button>
+        <button type="button" class="store-target-btn" data-store="flipkart" style="padding:4px 12px; border-radius:14px; border:1px solid #d1d5db; background:#ffffff; color:#4b5563; font-weight:500; cursor:pointer; font-size:12px;">
+          🛍️ Flipkart
+        </button>
+        <span style="color:#9ca3af; margin-left:auto; font-size:11px;">
+          💡 Compares Amazon & Flipkart side-by-side with real-time price arbitrage
+        </span>
+      </div>
+
+      <!-- Live Apify Crawler Result Container -->
+      <div id="apifyResultContainer" style="display:none; margin-top:20px;"></div>
 
       <!-- Universal Search Result Container -->
       <div id="universalResultContainer" style="display:none; margin-top:16px;"></div>
@@ -1430,9 +1462,190 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     universalInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        runUniversalSearch();
+        runApifyScrape();
       }
     });
+
+    // Apify Crawler Integration
+    let currentStoreTarget = 'both';
+    document.querySelectorAll('.store-target-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.store-target-btn').forEach((b) => {
+          b.style.border = '1px solid #d1d5db';
+          b.style.background = '#ffffff';
+          b.style.color = '#4b5563';
+          b.style.fontWeight = '500';
+        });
+        btn.style.border = '2px solid #1f7359';
+        btn.style.background = '#eef8f3';
+        btn.style.color = '#1f7359';
+        btn.style.fontWeight = '700';
+        currentStoreTarget = btn.getAttribute('data-store') || 'both';
+      });
+    });
+
+    const btnApifyScrape = document.getElementById('btnApifyScrape');
+    const apifyContainer = document.getElementById('apifyResultContainer');
+
+    async function checkCrawlerStatus() {
+      try {
+        const res = await fetch('/api/v1/apify/status');
+        if (res.ok) {
+          const data = await res.json();
+          const badge = document.getElementById('apifyBadge');
+          const cardBadge = document.getElementById('apifyCardBadge');
+          if (data.connected) {
+            badge.textContent = `🕷️ Apify Cloud: Active (${data.username || 'Connected'})`;
+            if (cardBadge) cardBadge.textContent = '🕷️ Apify Cloud: Active';
+          } else {
+            badge.textContent = '🕷️ Apify: Simulation Mode';
+            if (cardBadge) cardBadge.textContent = '🕷️ Apify: Simulation Mode';
+          }
+        }
+      } catch (e) {}
+
+      try {
+        const mcpRes = await fetch('/api/v1/mcp/info');
+        if (mcpRes.ok) {
+          const mcpData = await mcpRes.json();
+          const mcpBadge = document.getElementById('mcpBadge');
+          if (mcpBadge && mcpData.tools) {
+            mcpBadge.textContent = `🤖 MCP Server: ${mcpData.tools.length} Tools Ready`;
+          }
+        }
+      } catch (e) {}
+    }
+    checkCrawlerStatus();
+
+    async function runApifyScrape() {
+      const q = universalInput.value.trim();
+      if (!q) {
+        showToast('Please enter a product name or paste an Amazon/Flipkart link');
+        return;
+      }
+
+      btnApifyScrape.disabled = true;
+      btnApifyScrape.innerHTML = '<span>⏳</span> Scraping Apify Cloud...';
+      apifyContainer.style.display = 'block';
+      apifyContainer.innerHTML = '<div style="background:#f7fbf9; border:1px solid #cce2d6; border-radius:10px; padding:20px; text-align:center; color:#1f7359; font-weight:700;">🕷️ Crawling live e-commerce listings from Amazon & Flipkart via Apify Cloud...</div>';
+      universalResult.style.display = 'none';
+
+      try {
+        const resp = await fetch('/api/v1/apify/scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q, store: currentStoreTarget, save_to_db: true })
+        });
+        if (!resp.ok) throw new Error('Apify scrape failed');
+        const data = await resp.json();
+
+        // Render Head-to-Head Arbitrage Banner
+        let summaryBanner = '';
+        if (data.recommendation_summary) {
+          summaryBanner = `
+            <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:12px 18px; margin-bottom:16px; font-size:13px; font-weight:700; color:#166534; display:flex; align-items:center; gap:10px;">
+              <span style="font-size:18px;">⚖️</span>
+              <span>${data.recommendation_summary}</span>
+            </div>
+          `;
+        }
+
+        // Render Lowest Price & Savings header
+        let priceHeader = '';
+        if (data.lowest_price) {
+          priceHeader = `
+            <div style="display:flex; justify-content:space-between; align-items:center; background:#ffffff; border:1px solid #cce2d6; border-radius:10px; padding:14px 18px; margin-bottom:16px; flex-wrap:wrap; gap:12px;">
+              <div>
+                <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase;">Cheapest Listing</div>
+                <div style="font-size:22px; font-weight:800; color:#1f7359;">₹${parseFloat(data.lowest_price).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                <div style="font-size:11px; color:#77827d;">Found at ${data.cheapest_store}</div>
+              </div>
+              ${data.max_savings && parseFloat(data.max_savings) > 0 ? `
+                <div style="text-align:right;">
+                  <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase;">Arbitrage Savings</div>
+                  <div style="font-size:18px; font-weight:800; color:#0f766e;">Save ₹${parseFloat(data.max_savings).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                  <div style="font-size:11px; color:#16a34a; font-weight:700;">${data.savings_percentage}% price difference across listings</div>
+                </div>
+              ` : ''}
+            </div>
+          `;
+        }
+
+        // Render Quotes Grid
+        const quotesHtml = (data.quotes || []).map((q) => {
+          const isFk = q.store_code === 'flipkart';
+          return `
+            <div style="background:#ffffff; border:${q.is_lowest ? '2px solid #1f7359' : '1px solid #dce4e0'}; border-radius:10px; padding:16px; position:relative; box-shadow:${q.is_lowest ? '0 4px 12px rgba(31, 115, 89, 0.12)' : 'none'};">
+              ${q.is_lowest ? `
+                <span style="position:absolute; top:-9px; right:12px; background:#1f7359; color:#fff; font-size:9px; font-weight:800; padding:2px 8px; border-radius:4px; text-transform:uppercase;">
+                  Lowest Price
+                </span>
+              ` : ''}
+              <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+                <span style="font-size:12px; font-weight:700; padding:3px 8px; border-radius:6px; background:${isFk ? '#eff6ff' : '#fff7ed'}; color:${isFk ? '#1d4ed8' : '#c2410c'}; border:1px solid ${isFk ? '#bfdbfe' : '#fed7aa'}; display:inline-flex; align-items:center; gap:4px;">
+                  ${q.store_badge_emoji} ${q.store_name}
+                </span>
+                <span style="font-size:12px; color:#77827d; font-weight:600;">★ ${q.rating || '4.4'} ${q.reviews_count ? '(' + q.reviews_count + ')' : ''}</span>
+              </div>
+              <div style="font-size:12px; color:#4a5568; margin:8px 0; line-height:1.4; font-weight:600;">
+                ${q.title}
+              </div>
+              <div style="font-size:20px; font-weight:800; color:${q.is_lowest ? '#1f7359' : '#18231f'}; margin:8px 0 4px;">
+                ₹${parseFloat(q.price).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+              </div>
+              <div style="font-size:11px; color:#77827d; margin-bottom:12px;">
+                🚚 ${q.delivery_info || 'Standard Delivery'} · ${q.in_stock ? '🟢 In Stock' : '🔴 Out of Stock'}
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:11px; font-weight:700; color:${q.is_lowest ? '#1f7359' : '#dc3545'};">
+                  ${q.is_lowest ? '✓ Best Offer' : '+₹' + parseFloat(q.difference_from_lowest || 0).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                </span>
+                <a href="${q.store_url}" target="_blank" rel="noopener noreferrer" style="display:inline-flex; align-items:center; gap:4px; padding:6px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; background:${q.is_lowest ? '#1f7359' : '#ffffff'}; color:${q.is_lowest ? '#ffffff' : '#1f7359'}; border:1px solid #1f7359;">
+                  Visit Product ↗
+                </a>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        apifyContainer.innerHTML = `
+          <div style="background:#f7fbf9; border:1px solid #cce2d6; border-radius:12px; padding:20px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px; flex-wrap:wrap; gap:8px;">
+              <div>
+                <span style="font-size:11px; font-weight:700; color:#1f7359; text-transform:uppercase; letter-spacing:0.8px;">
+                  🕷️ Apify Crawler Results (${data.data_source})
+                </span>
+                <h3 style="font-size:18px; font-weight:800; margin:4px 0 2px;">${data.quotes?.[0]?.title || data.query}</h3>
+                <span style="font-size:12px; color:#77827d;">Target: ${data.target_store} · Query: "${data.query}"</span>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center;">
+                <span style="font-size:11px; font-weight:700; padding:4px 10px; border-radius:12px; background:#dcfce7; color:#15803d; border:1px solid #86efac;">
+                  ✓ Tracked in Database
+                </span>
+                <button type="button" onclick="document.getElementById('apifyResultContainer').style.display='none'" style="border:none; background:transparent; font-size:16px; cursor:pointer; color:#77827d;">✕</button>
+              </div>
+            </div>
+
+            ${summaryBanner}
+            ${priceHeader}
+
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:14px;">
+              ${quotesHtml}
+            </div>
+          </div>
+        `;
+
+        showToast(`✓ Scraped live listings for "${data.quotes?.[0]?.title || q}"!`);
+        await loadProducts();
+      } catch (err) {
+        apifyContainer.innerHTML = '<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:14px; color:#92400e; font-size:13px;">⚠️ Apify scrape failed or connection timed out. Check token or try keyword search.</div>';
+      } finally {
+        btnApifyScrape.disabled = false;
+        btnApifyScrape.innerHTML = '<span>🕷️</span> Live Scrape (Apify)';
+      }
+    }
+
+    btnApifyScrape.addEventListener('click', runApifyScrape);
 
     loadProducts();
 
