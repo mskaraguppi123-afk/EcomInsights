@@ -25,16 +25,12 @@ echo [1/3] Checking current repository status...
 "%GIT_CMD%" status --short
 
 echo.
-echo [2/3] Enter your remote GitHub / GitLab repository URL.
-echo Example: https://github.com/YOUR_USERNAME/EcomInsights.git
+echo [2/3] Remote GitHub repository:
+echo Default: https://github.com/mskaraguppi123-afk/EcomInsights.git
 echo.
-set /p REPO_URL="Repository URL: "
-
-if "%REPO_URL%"=="" (
-    echo [ERROR] No URL entered. Aborting.
-    pause
-    exit /b 1
-)
+set "REPO_URL="
+set /p REPO_URL="Enter repository URL [Press Enter to use default]: "
+if "%REPO_URL%"=="" set "REPO_URL=https://github.com/mskaraguppi123-afk/EcomInsights.git"
 
 echo.
 echo [3/3] Setting remote origin and pushing to GitHub...

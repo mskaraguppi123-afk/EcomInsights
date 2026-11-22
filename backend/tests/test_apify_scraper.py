@@ -137,3 +137,29 @@ def test_mcp_info_and_tools():
     assert server is not None
     assert server.name == "ecominsights-crawler-mcp"
 
+
+def test_brand_conflict_exclusion():
+    from app.services.search_matcher import match_product
+
+    # Vivo must reject Realme
+    is_m, score, reason = match_product("vivo", "Realme 12 5G")
+    assert not is_m
+    assert score == 0
+    assert "Brand conflict" in reason
+
+    # Victus (HP) must reject Asus
+    is_m, score, reason = match_product("victus", "ASUS TUF Gaming F15")
+    assert not is_m
+    assert score == 0
+    assert "Brand conflict" in reason
+
+    # Positive matches
+    is_m, score, _ = match_product("vivo", "Vivo V29 5G")
+    assert is_m
+    assert score >= 70
+
+    is_m, score, _ = match_product("victus", "HP Victus Gaming Laptop 15")
+    assert is_m
+    assert score >= 70
+
+

@@ -596,10 +596,54 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       return { normalized: norm, tokens, numbers, modelCodes, families, variants };
     }
 
+    const BRAND_GROUPS = {
+      apple: ['apple', 'iphone', 'ipad', 'macbook', 'airpods', 'imac'],
+      samsung: ['samsung', 'galaxy'],
+      vivo: ['vivo', 'iqoo'],
+      realme: ['realme', 'narzo'],
+      oppo: ['oppo', 'reno', 'find'],
+      xiaomi: ['xiaomi', 'redmi', 'poco', 'mi'],
+      oneplus: ['oneplus', 'nord'],
+      motorola: ['motorola', 'moto'],
+      google: ['google', 'pixel'],
+      nothing: ['nothing', 'cmf'],
+      hp: ['hp', 'victus', 'omen', 'pavilion', 'spectre', 'envy', 'probook'],
+      asus: ['asus', 'rog', 'tuf', 'zenbook', 'vivobook', 'zephyrus', 'strix'],
+      lenovo: ['lenovo', 'legion', 'loq', 'ideapad', 'thinkpad', 'yoga'],
+      dell: ['dell', 'alienware', 'xps', 'inspiron', 'latitude', 'g15', 'g16'],
+      acer: ['acer', 'predator', 'nitro', 'aspire', 'swift'],
+      sony: ['sony', 'bravia', 'playstation'],
+      boat: ['boat', 'rockerz', 'airdopes', 'bassheads'],
+    };
+
+    function detectBrands(norm) {
+      const found = new Set();
+      for (const [group, kws] of Object.entries(BRAND_GROUPS)) {
+        for (const kw of kws) {
+          if (new RegExp(`\\b${kw}\\b`).test(norm)) {
+            found.add(group);
+            break;
+          }
+        }
+      }
+      return found;
+    }
+
     function matchProduct(query, candidateName) {
       if (!query || !query.trim()) return { matched: true, score: 50 };
       const q = extractModelIdentifiers(query);
       const c = extractModelIdentifiers(candidateName);
+
+      // 0. Brand conflict check (e.g. Vivo vs Realme, Victus vs Asus)
+      const qBrands = detectBrands(q.normalized);
+      const cBrands = detectBrands(c.normalized);
+      if (qBrands.size > 0 && cBrands.size > 0) {
+        let overlap = false;
+        for (const b of qBrands) {
+          if (cBrands.has(b)) overlap = true;
+        }
+        if (!overlap) return { matched: false, score: 0 };
+      }
 
       // 1. Model family conflict: e.g. iPhone 16 must not match iPhone 18
       for (const [fam, qVal] of Object.entries(q.families)) {

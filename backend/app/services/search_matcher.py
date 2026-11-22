@@ -12,6 +12,43 @@ import re
 from typing import Any, Optional, Sequence, Tuple
 
 
+BRAND_GROUPS: dict[str, set[str]] = {
+    "apple": {"apple", "iphone", "ipad", "macbook", "airpods", "imac"},
+    "samsung": {"samsung", "galaxy"},
+    "vivo": {"vivo", "iqoo"},
+    "realme": {"realme", "narzo"},
+    "oppo": {"oppo", "reno", "find"},
+    "xiaomi": {"xiaomi", "redmi", "poco", "mi"},
+    "oneplus": {"oneplus", "nord"},
+    "motorola": {"motorola", "moto"},
+    "google": {"google", "pixel"},
+    "nothing": {"nothing", "cmf"},
+    "hp": {"hp", "victus", "omen", "pavilion", "spectre", "envy", "probook", "elitebook"},
+    "asus": {"asus", "rog", "tuf", "zenbook", "vivobook", "zephyrus", "strix"},
+    "lenovo": {"lenovo", "legion", "loq", "ideapad", "thinkpad", "yoga"},
+    "dell": {"dell", "alienware", "xps", "inspiron", "latitude", "g15", "g16", "vostro"},
+    "acer": {"acer", "predator", "nitro", "aspire", "swift", "travelmate"},
+    "sony": {"sony", "bravia", "playstation", "wh 1000xm", "wf 1000xm"},
+    "boat": {"boat", "rockerz", "airdopes", "bassheads", "storm"},
+    "noise": {"noise", "colorfit"},
+    "fireboltt": {"fireboltt", "fire boltt", "boltt"},
+}
+
+
+def detect_brands(text: str) -> set[str]:
+    """Identify recognized brand families from text."""
+    if not text:
+        return set()
+    norm = text.lower()
+    found: set[str] = set()
+    for group, keywords in BRAND_GROUPS.items():
+        for kw in keywords:
+            if re.search(rf"\b{re.escape(kw)}\b", norm):
+                found.add(group)
+                break
+    return found
+
+
 def normalize_search_text(text: str) -> str:
     """Normalize harmless differences: lowercasing, extra spaces, brand aliases, and common punctuation."""
     if not text:
@@ -86,6 +123,9 @@ def extract_model_identifiers(text: str) -> dict[str, Any]:
     storage_matches = set(re.findall(r"\b(\d+\s*(?:gb|tb))\b", norm))
     storage = {s.replace(" ", "") for s in storage_matches}
 
+    # Brand recognition
+    brands = detect_brands(norm)
+
     return {
         "raw": text,
         "normalized": norm,
@@ -97,6 +137,7 @@ def extract_model_identifiers(text: str) -> dict[str, Any]:
         "generation": generation,
         "variants": variants,
         "storage": storage,
+        "brands": brands,
     }
 
 
@@ -112,6 +153,13 @@ def match_product(query: str, candidate_name: str) -> Tuple[bool, int, str]:
 
     q_info = extract_model_identifiers(query)
     c_info = extract_model_identifiers(candidate_name)
+
+    # 0. Brand Conflict Check (e.g. Vivo vs Realme, Victus vs Asus)
+    # If the search specifically names a brand/product line, candidates of other brands are strictly excluded.
+    q_brands = q_info.get("brands") or set()
+    c_brands = c_info.get("brands") or set()
+    if q_brands and c_brands and not q_brands.intersection(c_brands):
+        return False, 0, f"Brand conflict: requested {q_brands} but candidate is {c_brands}"
 
     # 1. Family Model Conflict (e.g. iPhone 16 vs iPhone 18)
     # A query for iPhone 16 MUST NOT match iPhone 18

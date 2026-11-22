@@ -445,6 +445,15 @@ class ApifyScraperService:
             if title_is_acc and not query_wants_acc:
                 continue
 
+            # Reject brand conflicts / sponsored competitor listings (e.g. Realme when searching Vivo, Asus when searching Victus)
+            if not is_url:
+                from app.services.search_matcher import detect_brands
+                q_brands = detect_brands(query_or_url)
+                if q_brands:
+                    c_brands = detect_brands(title)
+                    if c_brands and not q_brands.intersection(c_brands):
+                        continue
+
             raw_price = item.get("price") or item.get("extracted_price") or item.get("priceValue")
             price, currency = parse_raw_price(raw_price, default_currency="INR")
             if not price or price <= 0:
@@ -539,6 +548,15 @@ class ApifyScraperService:
             title_is_acc = any(re.search(rf"\b{re.escape(k)}\b", t_lower) for k in acc_keywords)
             if title_is_acc and not query_wants_acc:
                 continue
+
+            # Reject brand conflicts / sponsored competitor listings (e.g. Realme when searching Vivo, Asus when searching Victus)
+            if not is_url:
+                from app.services.search_matcher import detect_brands
+                q_brands = detect_brands(query_or_url)
+                if q_brands:
+                    c_brands = detect_brands(title)
+                    if c_brands and not q_brands.intersection(c_brands):
+                        continue
 
             raw_price = item.get("price") or item.get("sellingPrice") or item.get("extracted_price")
             price, currency = parse_raw_price(raw_price, default_currency="INR")
