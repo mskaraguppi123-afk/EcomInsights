@@ -163,11 +163,18 @@ def is_disallowed_search_query(q: str) -> bool:
     # Pure short single- or two-character token
     if len(norm) <= 2:
         return True
-    # Pure opaque hash/ID without product words
-    if re.fullmatch(r"[a-z0-9_\-]{6,32}", norm) and " " not in norm:
-        common_words = {"iphone", "moto", "galaxy", "sony", "macbook", "airpods", "pixel"}
-        if not any(w in norm for w in common_words):
-            return True
+    # Pure opaque hash/ID without product words (e.g. b0dgttkcjx, itm577603c7a0d88, 02qbrboj)
+    # Pure alphabetic brand or product names (e.g. victus, lenovo, realme, laptop, tablet) are never hashes
+    if not norm.isalpha() and re.fullmatch(r"[a-z0-9_\-]{6,32}", norm) and " " not in norm:
+        has_digits = any(c.isdigit() for c in norm)
+        has_letters = any(c.isalpha() for c in norm)
+        if has_digits and has_letters:
+            common_words = {
+                "iphone", "moto", "galaxy", "sony", "macbook", "airpods", "pixel",
+                "victus", "realme", "vivo", "asus", "lenovo", "dell", "acer", "hp"
+            }
+            if not any(w in norm for w in common_words):
+                return True
     return False
 
 
@@ -485,11 +492,18 @@ def is_valid_product_title(title: str) -> bool:
         return False
 
     # Pure alphanumeric hash or token without spaces (e.g. 0fhQ0IWO, itm6ac6485515ae4, B0CHX1W1XY)
-    if re.fullmatch(r"[A-Za-z0-9_\-]{6,32}", cleaned) and " " not in cleaned:
-        # Check if it contains common product name words
-        common_words = {"iphone", "moto", "galaxy", "sony", "apple", "samsung", "pixel", "headphone", "macbook", "airpods"}
-        if not any(w in norm for w in common_words):
-            return False
+    # Pure alphabetic titles (e.g. victus, lenovo, realme, laptop, monitor) are valid
+    if not norm.isalpha() and re.fullmatch(r"[A-Za-z0-9_\-]{6,32}", cleaned) and " " not in cleaned:
+        has_digits = any(c.isdigit() for c in norm)
+        has_letters = any(c.isalpha() for c in norm)
+        if has_digits and has_letters:
+            common_words = {
+                "iphone", "moto", "galaxy", "sony", "apple", "samsung", "pixel",
+                "headphone", "macbook", "airpods", "victus", "realme", "vivo",
+                "asus", "lenovo", "dell", "acer", "hp"
+            }
+            if not any(w in norm for w in common_words):
+                return False
 
     # Must contain at least one word character sequence with length >= 2
     words = [w for w in re.findall(r"\b[A-Za-z0-9]+\b", norm) if len(w) >= 2]

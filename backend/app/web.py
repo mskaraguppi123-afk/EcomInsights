@@ -1538,7 +1538,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           const data = await res.json();
           const badge = document.getElementById('apifyBadge');
           const cardBadge = document.getElementById('apifyCardBadge');
-          if (data.connected) {
+          if (data.quota_exhausted) {
+            badge.style.background = '#fef3c7';
+            badge.style.color = '#92400e';
+            badge.style.border = '1px solid #fde68a';
+            badge.textContent = `🕷️ Apify ($5 Quota Met) · Live Engine Active`;
+            if (cardBadge) {
+              cardBadge.style.background = '#fef3c7';
+              cardBadge.style.color = '#92400e';
+              cardBadge.style.border = '1px solid #fde68a';
+              cardBadge.textContent = '🕷️ Live Multi-Store Engine';
+            }
+          } else if (data.connected) {
             badge.textContent = `🕷️ Apify Cloud: Active (${data.username || 'Connected'})`;
             if (cardBadge) cardBadge.textContent = '🕷️ Apify Cloud: Active';
           } else {
@@ -1669,6 +1680,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 <button type="button" onclick="document.getElementById('apifyResultContainer').style.display='none'" style="border:none; background:transparent; font-size:16px; cursor:pointer; color:#77827d;">✕</button>
               </div>
             </div>
+
+            ${data.message && data.message.includes('quota') ? `
+              <div style="font-size:12px; color:#92400e; background:#fef3c7; border:1px solid #fde68a; border-radius:8px; padding:8px 14px; margin-bottom:14px; font-weight:600;">
+                ℹ️ ${data.message}
+              </div>
+            ` : ''}
 
             ${summaryBanner}
             ${priceHeader}
